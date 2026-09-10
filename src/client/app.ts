@@ -808,7 +808,7 @@ async function doDecryptBalance(pair: TokenPair): Promise<void> {
       wallet.account as `0x${string}`,
     )) as bigint;
     out.textContent = `${fromBaseUnits(balance, pair.decimals)} ${pair.symbol}`;
-    status.textContent = "Decrypted in your browser only.";
+    status.textContent = "Decrypted locally in your browser.";
   } catch (error) {
     status.textContent = message(error);
   }

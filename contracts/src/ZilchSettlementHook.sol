@@ -126,6 +126,10 @@ contract ZilchSettlementHook is ZamaMultiChainConfig {
         if (_escrows[id].state != State.None) revert BadState();
 
         euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+        // The token computes on `amount` inside its own transfer logic, so under
+        // FHEVM's ACL the token — not just this contract — must be allowed to use
+        // the handle. Grant it transient access for the duration of this call.
+        FHE.allowTransient(amount, token);
         // Pull the confidential amount from the sender into this contract. The
         // returned handle is the amount actually moved; keep persistent ACL so it
         // can be transferred again in the (later) reveal or refund transaction.
@@ -169,6 +173,8 @@ contract ZilchSettlementHook is ZamaMultiChainConfig {
         }
 
         e.state = State.Released;
+        // The token computes on the held handle, so grant it transient access.
+        FHE.allowTransient(e.amount, token);
         IERC7984(token).confidentialTransfer(recipient, e.amount);
         emit Released(id, triggerId, recipient);
         return HOOK_ACK;
@@ -184,6 +190,8 @@ contract ZilchSettlementHook is ZamaMultiChainConfig {
         if (e.sender != msg.sender) revert NotSender();
 
         e.state = State.Refunded;
+        // The token computes on the held handle, so grant it transient access.
+        FHE.allowTransient(e.amount, e.token);
         IERC7984(e.token).confidentialTransfer(e.sender, e.amount);
         emit Refunded(id, msg.sender);
     }

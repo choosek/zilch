@@ -1,7 +1,6 @@
 # zilch
 
 [![network](https://img.shields.io/badge/network-Sepolia-2b4bff)](https://sepolia.etherscan.io)
-[![contracts](https://img.shields.io/badge/custom%20contracts-none-ffd400)](#no-custom-contracts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 A template dApp that pairs two confidentiality primitives on one payment: a [Zama](https://docs.zama.org/protocol) confidential token hides the **amount**, and a [Nillion Blacklight L1](https://docs.nillion.com) *Covenant* seals the **instruction** and opens it only when the price or the clock says so. It runs entirely on [Sepolia](https://sepolia.etherscan.io), in the browser and on [Vercel](https://vercel.com), with **no custom contracts** — only Zama's already-deployed ERC-7984 tokens and the Blacklight L1 network.
