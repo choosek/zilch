@@ -3,7 +3,7 @@
 [![network](https://img.shields.io/badge/network-Sepolia-2b4bff)](https://sepolia.etherscan.io)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-A template dApp that pairs two confidentiality primitives on one payment: a [Zama](https://docs.zama.org/protocol) confidential token hides the **amount**, and a [Nillion Blacklight L1](https://docs.nillion.com) *Covenant* seals the **instruction** and opens it only when the price or the clock says so. It runs entirely on [Sepolia](https://sepolia.etherscan.io), in the browser and on [Vercel](https://vercel.com), with **no custom contracts** — only Zama's already-deployed ERC-7984 tokens and the Blacklight L1 network.
+A template dApp that pairs two confidentiality primitives on one payment: a [Zama](https://docs.zama.org/protocol) confidential token hides the **amount**, and a [Nillion Blacklight L1](https://docs.nillion.com) *Covenant* seals the **instruction** and opens it only when the price or the clock says so. It runs on [Sepolia](https://sepolia.etherscan.io), in the browser and on [Vercel](https://vercel.com), atop Zama's already-deployed ERC-7984 tokens and the Blacklight L1 network, plus one custom contract — a settlement hook — that binds the two halves so the payment settles **atomically** when the Covenant opens.
 
 ## What zilch Does
 
@@ -18,7 +18,7 @@ A **sealed transfer** is a Covenant whose sealed payload is a transfer instructi
 | State     | What it means                                                      |  The on-chain fact behind it                       |
 |-----------|---------------------------------------------------------------------|---------------------------------------------------|
 | `sealed`  | The trigger has not fired; the instruction is hidden.               | The Covenant is unresolved and before its deadline. |
-| `open`    | The trigger fired; the instruction is revealed and ready to settle. | The Covenant resolved — a `TriggerResolved` event carries the plaintext. |
+| `open`    | The trigger fired; the instruction is revealed and the escrowed amount is released to the recipient. | The Covenant resolved — a `TriggerResolved` event carries the plaintext. |
 | `expired` | The deadline passed untriggered; it settles to nothing (*zilch*).   | The Covenant is unresolved and past its deadline.  |
 
 When a transfer opens, the committee's reconstruction makes the instruction public — but the amount is never part of it. The amount lives only in Zama's ciphertext, so opening the envelope reveals *who* and *what*, never *how much*.
@@ -42,18 +42,18 @@ Each primitive conceals exactly what the other would expose:
 Everything below is a browser action against deployed contracts, signed by your wallet. The server never holds a key, ETH, or NIL.
 
 1. **Fund.** Publicly mint the mock underlying ([USDC mock](https://sepolia.etherscan.io/address/0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF)) with your wallet, then `shield` it into a confidential [cUSDC](https://sepolia.etherscan.io/address/0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639) balance (one call that approves the wrapper and wraps). Decrypt the balance back — only you can.
-2. **Seal.** Compose `{recipient, amount, trigger, deadline, memo}`. The amount stays in your browser; the instruction is sealed into a Covenant via `/api/seal`, and your wallet posts it (paying the Covenant escrow, the NIL protocol fee, and gas — you are the author of record).
+2. **Seal.** Compose `{recipient, amount, trigger, deadline, memo}`. The amount — still encrypted — is escrowed into the settlement hook, and the instruction is sealed into a Covenant via `/api/seal`; your wallet posts it (paying the Covenant escrow, the NIL protocol fee, and gas — you are the author of record).
 3. **Watch.** The feed shows sealed transfers counting down toward their triggers.
-4. **Open.** When the trigger fires, the committee resolves the Covenant and the instruction opens. If it lingers, anyone can reveal it — reconstructing from the posted shares — for the reconstructor fee.
-5. **Settle.** Call `confidentialTransfer` on the wrapped token: the SDK encrypts the amount in your browser and sends it, so the amount stays concealed on-chain forever. The recipient decrypts their balance privately.
+4. **Open & settle.** When the trigger fires, the committee resolves the Covenant: the instruction opens and, *in the same transaction*, the settlement hook releases the escrowed amount to the recipient. If it lingers, anyone can reveal it — reconstructing from the posted shares — for the reconstructor fee.
+5. **Done.** The recipient decrypts their balance privately; the amount was never public on-chain. If a Covenant expires untriggered, the sender reclaims the escrow with a refund.
 
-## No Custom Contracts
+## The Settlement Hook
 
-zilch deliberately deploys nothing of its own. Zama's persistence — the fact that any decryptable encrypted value must pass through a deployed FHEVM contract with the right [ACL](https://docs.zama.org/protocol) grants — is satisfied by driving Zama's *already-deployed* Sepolia tokens, whose mock underlying has a public `mint`. The Covenant half needs no contract at all: sealing, posting, reading, revealing, and settling are all calls to the standing Blacklight market.
+zilch deploys a single contract of its own: `ZilchSettlementHook`. Everything else runs on infrastructure that is already on-chain — Zama's deployed ERC-7984 tokens (whose mock underlying has a public `mint`), and the standing Blacklight market, which needs no bespoke contract to seal, post, read, reveal, or resolve a Covenant.
 
-There is exactly one honest cost to owning no contract: **settlement is not atomic.** A Covenant cannot itself call `confidentialTransfer` when it opens — that bridge is a *hook*, and a hook is a contract. So in zilch the Covenant opening reveals the instruction, and the confidential transfer is a second, browser-signed step at settlement. Everything else is complete. A roughly thirty-line settlement hook (an `onReveal` that pulls a pre-authorised confidential transfer) is the upgrade that makes it atomic; the demo stands on its own without it, and this is the only place a contract would change the shape of the flow.
+The hook exists to make settlement **atomic**. A Covenant cannot itself call `confidentialTransfer` when it opens — that bridge is a *hook*, and a hook is a contract. So the hook escrows the confidential amount when a transfer is sealed and, inside the Covenant's reveal transaction, releases it to the sealed recipient: the payment happens if and only if the Covenant opens, for the escrowed (still-encrypted) amount, to the sealed recipient — enforced on-chain rather than left to a second, manual, browser-signed step. If a Covenant expires untriggered, the sender reclaims the escrow with `refund`.
 
-`ZilchSettlementHook` — an `onReveal` that escrows the confidential amount when a transfer is sealed and releases it to the sealed recipient *inside the reveal transaction* — lives in [`contracts/`](contracts/README.md). With no `ZILCH_HOOK` configured, zilch runs exactly as described above — contract-free, with manual settlement. It is also **unaudited**: the reference the demo points at, not a validated dependency. See [contracts/README.md](contracts/README.md) for the design, deployment, and trust model.
+The contract is **unaudited** — a reference to build on, not a validated dependency — and it is deployed by the operator, not by this repository. It is wired in through `ZILCH_HOOK`; with no hook configured, zilch falls back to a hookless mode where settlement is a manual `confidentialTransfer` after the Covenant opens. The source, the trust model, and the exact escrow/release/refund flow live in [`contracts/`](contracts/README.md).
 
 ## Architecture
 
@@ -66,7 +66,8 @@ zilch/
 │   ├── transfer.ts      GET  one sealed transfer in full
 │   ├── tokens.ts        GET  the confidential token zilch is configured for
 │   ├── seal.ts          POST build the Covenant post that seals an instruction
-│   └── keeper-tx.ts     POST build a reveal / settle transaction
+│   ├── keeper-tx.ts     POST build a reveal / settle transaction
+│   └── config.ts        GET  settlement-hook address and atomic-mode flag
 ├── src/
 │   ├── core/            pure, unit-tested logic (no chain, no I/O)
 │   │   ├── instruction.ts  encode/decode the sealed instruction ↔ bytes
@@ -82,8 +83,13 @@ zilch/
 │   │   └── http.ts         uniform JSON + error helpers
 │   ├── client/          the browser SPA (bundles viem + @zama-fhe/sdk)
 │   │   ├── app.ts          views, wallet, Zama shield/transfer/decrypt, settlement
+│   │   ├── hookArtifact.ts compiled settlement-hook ABI + bytecode (deploy)
 │   │   └── declarations.d.ts  ambient wallet (EIP-6963) types
 │   └── shared/types.ts  the wire contract between client and server
+├── contracts/           the one custom contract — the settlement hook
+│   ├── src/ZilchSettlementHook.sol  escrow, release on reveal, refund
+│   ├── compile.mjs      solc build → src/client/hookArtifact.ts
+│   └── README.md        design, deployment, trust model
 ├── vite.config.ts       client build → public/build/ (WASM inlined)
 └── public/              index.html, zilch.css, favicon.svg (build/ is generated)
 ```
@@ -159,7 +165,7 @@ Version numbers follow [Semantic Versioning 2.0.0](https://semver.org/#semantic-
 
 ## What This Is Not
 
-zilch is a **template on a testnet**, not a product. It is not affiliated with or endorsed by Nillion or Zama. It handles test funds only. Its confidentiality rests on assumptions: the sealed instruction is protected only while fewer than *k* of the committee's *m* operators collude, and the amount's confidentiality rests on Zama's threshold KMS and its ACL. Settlement is not atomic without the hook described [above](#no-custom-contracts). And because the amount is applied at settlement rather than bound on-chain at seal time, the optional amount commitment in the instruction is advisory in this template — a contract would be needed to enforce it. None of these is hidden in the interface.
+zilch is a **template on a testnet**, not a product. It is not affiliated with or endorsed by Nillion or Zama. It handles test funds only. Its confidentiality rests on assumptions: the sealed instruction is protected only while fewer than *k* of the committee's *m* operators collude, and the amount's confidentiality rests on Zama's threshold KMS and its ACL. The [settlement hook](#the-settlement-hook) that binds the two halves is **unaudited** — a reference to build on, not a reviewed contract. None of these is hidden in the interface.
 
 ## License
 
