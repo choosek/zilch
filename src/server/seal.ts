@@ -152,19 +152,6 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
   const ceiling = suggestCeiling(basefee);
   const keyIds = committee.keys.map((key) => key.keyId);
 
-  const quote = await quoteEscrow(pub, addr.market, {
-    mode: "PUBLIC_CONDITION",
-    keyIds,
-    k,
-    ceilingWei: ceiling,
-    maxLayerLen: maxLayerLen(sealed.layers),
-  });
-  const fee = await quoteProtocolFee(
-    pub,
-    { config: addr.config, nil: addr.nil, market: addr.market },
-    author,
-  );
-
   // Atomic settlement: wire in the settlement hook only when the client opts in
   // (`useHook`) AND a valid ZILCH_HOOK is configured. Otherwise the covenant
   // posts with no hook, exactly as before — so a fresh deployment is unaffected.
@@ -177,6 +164,24 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
   const hookGasLimit = useHook
     ? Number(process.env.ZILCH_HOOK_GAS ?? "3000000")
     : 0;
+
+  // The escrow deposit carries a hook line priced from `hookGasLimit`, and the
+  // market rejects a `msg.value` that differs by even one wei (`WrongValue`). So
+  // the quote MUST see the same hook parameters the post declares — otherwise a
+  // hook-bearing post is funded with a hookless quote and reverts.
+  const quote = await quoteEscrow(pub, addr.market, {
+    mode: "PUBLIC_CONDITION",
+    keyIds,
+    k,
+    ceilingWei: ceiling,
+    maxLayerLen: maxLayerLen(sealed.layers),
+    ...(useHook ? { hook: hookAddress, hookGasLimit } : {}),
+  });
+  const fee = await quoteProtocolFee(
+    pub,
+    { config: addr.config, nil: addr.nil, market: addr.market },
+    author,
+  );
 
   const postData = encodeFunctionData({
     abi: triggerMarketAbi,

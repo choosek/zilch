@@ -727,7 +727,7 @@ async function renderFund(): Promise<void> {
       </div>
       <div class="ipanel">
         <div class="step">2</div><div class="ilabel">Wrap</div>
-        <p class="muted">Approve, then wrap into confidential ${escapeHtml(pair.symbol)}.</p>
+        <p class="muted">Approve and wrap into confidential ${escapeHtml(pair.symbol)}.</p>
         <input id="wrap-amount" class="in" inputmode="decimal" placeholder="e.g. 250" value="250" />
         <button class="btn solid" id="wrap-btn">Approve &amp; wrap</button>
         <div class="status" id="wrap-status"></div>
