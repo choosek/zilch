@@ -29,6 +29,7 @@ import {
   pick,
   triggerMarketAbi,
 } from "../src/server/chain.js";
+import { decodeRevert } from "../src/server/decode.js";
 import { fail, send } from "../src/server/http.js";
 import type { KeeperAction, KeeperTxResponse } from "../src/shared/types.js";
 
@@ -119,11 +120,7 @@ export default async function handler(
   try {
     await pub.call({ account: SIM_FROM, to: market, data });
   } catch (error) {
-    simulated = String(
-      (error as { shortMessage?: string }).shortMessage ??
-        (error as Error).message ??
-        "would revert",
-    ).slice(0, 200);
+    simulated = decodeRevert(error).message;
   }
 
   const response: KeeperTxResponse = {

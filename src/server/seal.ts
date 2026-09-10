@@ -46,6 +46,7 @@ import {
   protocolConfigAbi,
   triggerMarketAbi,
 } from "./chain.js";
+import { decodeRevert } from "./decode.js";
 
 /** A rejected seal: the request is malformed or unsatisfiable. The route maps
  *  this to `400`, distinguishing it from a chain fault (`502`). */
@@ -216,11 +217,7 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
         value: quote.escrowWei,
       });
     } catch (error) {
-      simulated = String(
-        (error as { shortMessage?: string }).shortMessage ??
-          (error as Error).message ??
-          "would revert",
-      ).slice(0, 200);
+      simulated = decodeRevert(error).message;
     }
   } else {
     simulated = "not simulated (send the NIL approval first)";
