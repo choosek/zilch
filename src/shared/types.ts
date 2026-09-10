@@ -165,6 +165,9 @@ export interface SealResponse {
   commit: string;
   committee: { m: number; k: number; nodeIds: string[] };
   deadlineUnix: number;
+  /** A best-effort dry-run of the post: `"ok"`, a revert reason, or a note that
+   *  it was not simulated because a NIL approval must be sent first. */
+  simulated: string;
   note: string;
 }
 

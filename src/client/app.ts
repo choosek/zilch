@@ -149,6 +149,16 @@ function makeWalletClient() {
   });
 }
 
+/** Wait for a submitted transaction to be mined, so a dependent transaction is
+ *  estimated against the updated chain state (e.g. post after a NIL approval). */
+async function waitForReceipt(hash: string): Promise<void> {
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(),
+  });
+  await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+}
+
 let sdkReady: Promise<ZamaSDK> | null = null;
 let sdkAccountKey: string | null = null;
 
@@ -746,7 +756,25 @@ async function doSeal(pair: TokenPair): Promise<void> {
     await ensureSepolia();
     if (built.approve) {
       status.textContent = "Approve NIL for the protocol fee…";
-      await sendTx(built.approve);
+      const approveHash = await sendTx(built.approve);
+      // Wait for the approval to be mined so the post is estimated against the
+      // updated allowance — otherwise the wallet rejects the post as failing.
+      status.textContent = "Waiting for the NIL approval to confirm…";
+      await waitForReceipt(approveHash);
+    }
+    if (
+      built.simulated &&
+      built.simulated !== "ok" &&
+      !built.simulated.startsWith("not simulated")
+    ) {
+      if (
+        !confirm(
+          `Posting the Covenant is expected to revert:\n\n${built.simulated}\n\nSend anyway?`,
+        )
+      ) {
+        status.textContent = "";
+        return;
+      }
     }
     status.textContent = "Post the Covenant to seal this transfer…";
     const hash = await sendTx(built.post);

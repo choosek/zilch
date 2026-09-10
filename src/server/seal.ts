@@ -201,6 +201,31 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
         }
       : null;
 
+  // Dry-run the post so the wallet's opaque "transaction failed" can be replaced
+  // with the protocol's own revert reason. Only meaningful when no NIL approval
+  // is pending — a fresh wallet's post would revert on the allowance until the
+  // approve is mined, so that case is reported as unsimulated rather than a false
+  // failure.
+  let simulated = "ok";
+  if (approve === null) {
+    try {
+      await pub.call({
+        account: author,
+        to: addr.market as `0x${string}`,
+        data: postData,
+        value: quote.escrowWei,
+      });
+    } catch (error) {
+      simulated = String(
+        (error as { shortMessage?: string }).shortMessage ??
+          (error as Error).message ??
+          "would revert",
+      ).slice(0, 200);
+    }
+  } else {
+    simulated = "not simulated (send the NIL approval first)";
+  }
+
   return {
     approve,
     post: {
@@ -216,6 +241,7 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
       nodeIds: committee.keys.map((key) => key.nodeId.toString()),
     },
     deadlineUnix: req.deadlineUnix,
+    simulated,
     note:
       `Covenant escrow ${formatEther(quote.escrowWei)} ETH, protocol fee ${formatNil(fee.feeNil)} NIL. ` +
       (approve === null
