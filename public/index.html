@@ -54,14 +54,6 @@
       </div>
     </div>
 
-    <!--
-      Zama relayer SDK, loaded from Zama's CDN as window.relayerSDK. Verify the
-      exact version/URL against Zama's current "Using the CDN" docs on deploy;
-      the app degrades with a clear message if it fails to load.
-    -->
-    <script
-      src="https://cdn.zama.ai/relayer-sdk-js/0.3.0/relayer-sdk-js.umd.cjs"
-    ></script>
-    <script src="/app.js"></script>
+    <script type="module" src="/build/app.js"></script>
   </body>
 </html>

@@ -8,18 +8,20 @@
   "scripts": {
     "dev": "vercel dev",
     "dev:local": "tsx scripts/dev-server.ts",
-    "build": "tsx scripts/build-client.ts",
+    "build": "vite build",
     "lint": "biome check",
     "format": "biome format --write",
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "install-hooks": "lefthook install",
-    "deploy": "pnpm build && vercel --prod"
+    "deploy": "pnpm build && vercel --prod",
+    "build:watch": "vite build --watch"
   },
   "dependencies": {
     "@nillion/blacklight-l1-sdk": "^0.4.1",
-    "viem": "^2.22.8"
+    "@zama-fhe/sdk": "^3.5.1",
+    "viem": "^2.56.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.0.5",
@@ -33,6 +35,8 @@
     "lefthook": "^1.11.14",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
+    "vite": "^8.2.2",
+    "vite-plugin-node-polyfills": "^0.28.0",
     "vitest": "^3.2.4"
   },
   "engines": {

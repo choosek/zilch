@@ -5,13 +5,19 @@
  * (both wallet-free reads), plus the flows that touch a wallet: funding a
  * confidential balance, sealing a transfer into a Covenant, and settling one
  * once it opens. Reads talk only to the `/api` routes, which return preformatted
- * JSON — the client ships no ABIs. The amount is the client's alone: it is
- * encrypted here with Zama's SDK (loaded from a CDN, never bundled) and handed to
- * the wallet as a ciphertext handle, so it is never seen by the server or the
- * chain. The wallet is discovered via EIP-6963, so MetaMask, Rainbow, and any
+ * JSON. The confidential amount is handled entirely in the browser by Zama's v3
+ * SDK (`@zama-fhe/sdk`, bundled), whose `WrappedToken` shields, transfers, and
+ * decrypts without the amount ever reaching the server or appearing on-chain in
+ * the clear. The wallet is discovered via EIP-6963, so MetaMask, Rainbow, and any
  * other conforming wallet all work.
  */
 
+import { ZamaSDK } from "@zama-fhe/sdk";
+import { sepolia as sepoliaFhe } from "@zama-fhe/sdk/chains";
+import { createConfig } from "@zama-fhe/sdk/viem";
+import { web } from "@zama-fhe/sdk/web";
+import { createPublicClient, createWalletClient, custom, http } from "viem";
+import { sepolia } from "viem/chains";
 import {
   escapeHtml,
   formatDateUtc,
@@ -39,7 +45,6 @@ import type {
 const SEPOLIA_HEX = "0xaa36a7"; // 11155111
 const EXPLORER = "https://sepolia.etherscan.io";
 const REFRESH_MS = 12000; // Sepolia's ~12s block time
-const PERMIT_DAYS = 7; // how long a decryption permit stays valid
 
 /** Chain time minus local time, learned at each fetch, so countdowns tick
  *  against the chain's clock rather than the browser's. */
@@ -111,93 +116,86 @@ function fromBaseUnits(base: string | bigint, decimals: number): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* Zama (loaded from a CDN as window.relayerSDK)                      */
+/* Zama v3 SDK (bundled; talks to the open Sepolia relayer)           */
 /* ------------------------------------------------------------------ */
 
-let zamaInstance: ZamaInstance | null = null;
-let zamaInit: Promise<ZamaInstance> | null = null;
+/** A confidential-token wrapper handle, as returned by `createWrappedToken`. */
+type Wrapped = ReturnType<InstanceType<typeof ZamaSDK>["createWrappedToken"]>;
 
-/** Lazily initialise the Zama SDK and build a Sepolia instance, once. */
-async function getZama(): Promise<ZamaInstance> {
-  if (zamaInstance) {
-    return zamaInstance;
-  }
-  const sdk = window.relayerSDK;
-  if (!sdk) {
-    throw new Error(
-      "Zama SDK failed to load — check the CDN <script> in index.html",
-    );
-  }
-  if (!zamaInit) {
-    zamaInit = (async () => {
-      await sdk.initSDK();
-      const instance = await sdk.createInstance(sdk.SepoliaConfig);
-      zamaInstance = instance;
-      return instance;
-    })();
-  }
-  return zamaInit;
-}
+/** The minimal ABI for the mock underlying's public faucet mint. */
+const MINT_ABI = [
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
 
-/** Normalise a handle or proof (bytes or hex) to `0x`-hex. */
-function toHex(value: Uint8Array | string): string {
-  if (typeof value === "string") {
-    return value.startsWith("0x") ? value : `0x${value}`;
-  }
-  let hex = "0x";
-  for (const byte of value) {
-    hex += byte.toString(16).padStart(2, "0");
-  }
-  return hex;
-}
-
-/** Encrypt an amount for one token and the connected account, returning the
- *  external handle and input proof the confidential transfer needs. */
-async function encryptAmount(
-  token: string,
-  amount: bigint,
-): Promise<{ handle: string; inputProof: string }> {
-  if (!wallet.account) {
+/** A viem wallet client backed by the connected EIP-1193 provider. Used for the
+ *  faucet mint and, inside the SDK config, for confidential writes. */
+function makeWalletClient() {
+  if (!wallet.provider || !wallet.account) {
     throw new Error("connect a wallet first");
   }
-  const instance = await getZama();
-  const input = instance.createEncryptedInput(token, wallet.account);
-  input.add64(amount);
-  const enc = await input.encrypt();
-  return { handle: toHex(enc.handles[0]), inputProof: toHex(enc.inputProof) };
+  return createWalletClient({
+    account: wallet.account as `0x${string}`,
+    chain: sepolia,
+    transport: custom(wallet.provider),
+  });
 }
 
-/** User-decrypt a single balance handle for one token, via an EIP-712 permit the
- *  wallet signs. Returns the cleartext as a decimal string. */
-async function userDecrypt(token: string, handle: string): Promise<string> {
-  if (!wallet.account || !wallet.provider) {
+let sdkReady: Promise<ZamaSDK> | null = null;
+let sdkAccountKey: string | null = null;
+
+/**
+ * Build the Zama SDK once for the connected wallet, rebuilding if the account
+ * changes. The wallet's provider backs a viem wallet client; reads use a public
+ * Sepolia client. The `sepolia` chain preset carries the current, open testnet
+ * relayer (`relayer.testnet.zama.org/v2`), so no API key or proxy is needed.
+ */
+async function getSdk(): Promise<ZamaSDK> {
+  if (!wallet.provider || !wallet.account) {
     throw new Error("connect a wallet first");
   }
-  const instance = await getZama();
-  const { publicKey, privateKey } = instance.generateKeypair();
-  const start = Math.floor(Date.now() / 1000);
-  const contracts = [token];
-  const eip712 = instance.createEIP712(
-    publicKey,
-    contracts,
-    start,
-    PERMIT_DAYS,
-  );
-  const signature = (await wallet.provider.request({
-    method: "eth_signTypedData_v4",
-    params: [wallet.account, JSON.stringify(eip712)],
-  })) as string;
-  const result = await instance.userDecrypt(
-    [{ handle, contractAddress: token }],
-    privateKey,
-    publicKey,
-    signature.replace(/^0x/, ""),
-    contracts,
-    wallet.account,
-    start,
-    PERMIT_DAYS,
-  );
-  return String(result[handle] ?? "");
+  const key = wallet.account.toLowerCase();
+  if (sdkReady && sdkAccountKey === key) {
+    return sdkReady;
+  }
+  sdkAccountKey = key;
+  const walletClient = makeWalletClient();
+  sdkReady = (async () => {
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http(),
+    });
+    const config = createConfig({
+      chains: [sepoliaFhe],
+      publicClient,
+      walletClient,
+      relayers: { [sepoliaFhe.id]: web() },
+    });
+    return new ZamaSDK(config);
+  })();
+  return sdkReady;
+}
+
+/** A memoised `WrappedToken` for one confidential-token address. */
+let wrappedCache: { key: string; wrapped: Wrapped } | null = null;
+
+async function getWrapped(tokenAddr: string): Promise<Wrapped> {
+  const sdk = await getSdk();
+  const key = `${sdkAccountKey}:${tokenAddr.toLowerCase()}`;
+  if (wrappedCache && wrappedCache.key === key) {
+    return wrappedCache.wrapped;
+  }
+  const wrapped = sdk.createWrappedToken(tokenAddr as `0x${string}`);
+  wrappedCache = { key, wrapped };
+  return wrapped;
 }
 
 /* ------------------------------------------------------------------ */
@@ -585,19 +583,20 @@ async function doFaucet(pair: TokenPair): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
+    await ensureSepolia();
     const amount = toBaseUnits(
       ($("faucet-amount") as HTMLInputElement).value,
       pair.decimals,
     );
-    status.textContent = "Building mint…";
-    const tx = await postJson<Tx>("/api/tx", {
-      kind: "faucet",
-      token: pair.confidentialToken,
-      amount: amount.toString(),
-      from: wallet.account,
+    status.textContent = `Minting ${pair.underlyingSymbol}…`;
+    const walletClient = makeWalletClient();
+    const hash = await walletClient.writeContract({
+      address: pair.underlying as `0x${string}`,
+      abi: MINT_ABI,
+      functionName: "mint",
+      args: [wallet.account as `0x${string}`, amount],
     });
-    const hash = await sendTx(tx);
-    status.innerHTML = txDone("Minted", hash);
+    status.innerHTML = txDone(`Minted ${pair.underlyingSymbol}`, hash);
   } catch (error) {
     status.textContent = message(error);
   }
@@ -609,27 +608,15 @@ async function doWrap(pair: TokenPair): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
+    await ensureSepolia();
     const amount = toBaseUnits(
       ($("wrap-amount") as HTMLInputElement).value,
       pair.decimals,
     );
-    status.textContent = "Approving the wrapper…";
-    const approve = await postJson<Tx>("/api/tx", {
-      kind: "approve",
-      token: pair.confidentialToken,
-      amount: amount.toString(),
-      from: wallet.account,
-    });
-    await sendTx(approve);
-    status.textContent = "Approved. Wrapping…";
-    const wrap = await postJson<Tx>("/api/tx", {
-      kind: "wrap",
-      token: pair.confidentialToken,
-      amount: amount.toString(),
-      from: wallet.account,
-    });
-    const hash = await sendTx(wrap);
-    status.innerHTML = txDone(`Wrapped into ${escapeHtml(pair.symbol)}`, hash);
+    status.textContent = "Approving and wrapping…";
+    const wrapped = await getWrapped(pair.confidentialToken);
+    const result = await wrapped.shield(amount);
+    status.innerHTML = `Wrapped into ${escapeHtml(pair.symbol)}${hashOf(result)}`;
   } catch (error) {
     status.textContent = message(error);
   }
@@ -642,13 +629,13 @@ async function doDecryptBalance(pair: TokenPair): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    status.textContent = "Reading the handle…";
-    const { handle } = await getJson<{ handle: string }>(
-      `/api/balance?token=${pair.confidentialToken}&account=${wallet.account}`,
-    );
-    status.textContent = "Sign the permit to decrypt…";
-    const clear = await userDecrypt(pair.confidentialToken, handle);
-    out.textContent = `${fromBaseUnits(clear, pair.decimals)} ${pair.symbol}`;
+    await ensureSepolia();
+    status.textContent = "Sign to decrypt your balance…";
+    const wrapped = await getWrapped(pair.confidentialToken);
+    const balance = (await wrapped.balanceOf(
+      wallet.account as `0x${string}`,
+    )) as bigint;
+    out.textContent = `${fromBaseUnits(balance, pair.decimals)} ${pair.symbol}`;
     status.textContent = "Decrypted in your browser only.";
   } catch (error) {
     status.textContent = message(error);
@@ -783,6 +770,7 @@ async function doSettle(
     if (!ensureWallet()) {
       return;
     }
+    await ensureSepolia();
     const pair = await token();
     const decimals =
       instruction.token.toLowerCase() === pair.confidentialToken.toLowerCase()
@@ -792,22 +780,13 @@ async function doSettle(
       ($("settle-amount") as HTMLInputElement).value,
       decimals,
     );
-    status.textContent = "Encrypting the amount in your browser…";
-    const { handle, inputProof } = await encryptAmount(
-      instruction.token,
+    status.textContent = "Encrypting and sending confidentially…";
+    const wrapped = await getWrapped(instruction.token);
+    const result = await wrapped.confidentialTransfer(
+      instruction.recipient as `0x${string}`,
       amount,
     );
-    status.textContent = "Building the confidential transfer…";
-    const tx = await postJson<Tx>("/api/tx", {
-      kind: "send",
-      token: instruction.token,
-      recipient: instruction.recipient,
-      handle,
-      inputProof,
-      from: wallet.account,
-    });
-    const hash = await sendTx(tx);
-    status.innerHTML = `${txDone("Sent confidentially", hash)} — the amount stays encrypted on-chain.`;
+    status.innerHTML = `Sent confidentially${hashOf(result)} — the amount stays encrypted on-chain.`;
     window.setTimeout(() => void loadTransfer(t.id, { silent: true }), 4000);
   } catch (error) {
     status.textContent = message(error);
@@ -1033,6 +1012,19 @@ function readStash(commit: string): Stash | null {
 
 function txDone(label: string, hash: string): string {
   return `${escapeHtml(label)} · <a class="mono" href="${EXPLORER}/tx/${hash}" target="_blank" rel="noreferrer">${truncateAddress(hash)}</a>`;
+}
+
+/** Render a tx-hash link from an SDK return value, tolerating a hash string, a
+ *  `{ hash }`/`{ transactionHash }` object, or nothing. */
+function hashOf(result: unknown): string {
+  const record = result as { hash?: string; transactionHash?: string } | null;
+  const hash =
+    typeof result === "string"
+      ? result
+      : (record?.hash ?? record?.transactionHash);
+  return hash
+    ? ` · <a class="mono" href="${EXPLORER}/tx/${hash}" target="_blank" rel="noreferrer">${truncateAddress(hash)}</a>`
+    : "";
 }
 
 function message(error: unknown): string {

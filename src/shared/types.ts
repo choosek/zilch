@@ -134,24 +134,14 @@ export interface TokensResponse {
 
 /* ---- building transactions (the server holds the ABIs; the wallet signs) ---- */
 
-/** A ready transaction for the wallet to send. */
+/** A ready transaction for the wallet to send. Used for the covenant post and
+ *  keeper actions; confidential-token operations are done in the browser by
+ *  Zama's SDK and never cross this wire. */
 export interface Tx {
   to: string;
   data: string;
   value: string;
   chainId: number;
-}
-
-/** `POST /api/tx` — build one confidential-token transaction. `send` carries the
- *  Zama-produced ciphertext handle and input proof; `faucet` and `wrap` do not. */
-export interface TxRequest {
-  kind: "faucet" | "approve" | "wrap" | "send";
-  token: string; // confidential token address (or its underlying, for faucet/approve)
-  amount?: string; // base units, for faucet/wrap (never for send)
-  recipient?: string; // for send
-  handle?: string; // for send: the external euint64 handle from Zama
-  inputProof?: string; // for send: the Zama input proof
-  from: string;
 }
 
 /** `POST /api/seal` request: the transfer to seal into a covenant. */
