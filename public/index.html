@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>zilch — sealed confidential transfers</title>
+    <meta
+      name="description"
+      content="A template dapp pairing Zama confidential amounts with Nillion Blacklight L1 Covenants on Sepolia: seal a transfer instruction that opens itself when price or time dictates to do so (while the amount stays encrypted)."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/zilch.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a href="?" id="brand" class="brand">
+        <span class="brandmark" aria-hidden="true"></span>zilch
+      </a>
+      <nav class="nav">
+        <a href="?" id="nav-feed">Transfers Feed</a>
+        <a href="?view=fund" id="nav-fund">Fund Confidential Balance</a>
+        <a href="?view=compose" id="nav-new">Seal &amp; Configure Transfer</a>
+      </nav>
+      <button id="connect-btn" class="btn ghost">Connect wallet</button>
+    </header>
+
+    <main id="view"></main>
+
+    <footer class="foot">
+      <div class="foot-rule" aria-hidden="true"></div>
+      <p>
+        <b>zilch</b> is a template dApp on <b>Sepolia testnet</b>. Not affiliated
+        with Nillion or Zama. It uses no custom contracts — only Zama's deployed
+        ERC-7984 tokens and the Nillion Blacklight L1 network. Test funds only.
+      </p>
+    </footer>
+
+    <div id="wallet-modal" class="modal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <span>Connect Wallet</span>
+          <button id="wallet-close" class="x" aria-label="close">×</button>
+        </div>
+        <div id="wallet-list" class="wallet-list"></div>
+        <p class="modal-note">
+          MetaMask, Rainbow, or any EIP-6963 wallet — on Sepolia.
+        </p>
+      </div>
+    </div>
+
+    <!--
+      Zama relayer SDK, loaded from Zama's CDN as window.relayerSDK. Verify the
+      exact version/URL against Zama's current "Using the CDN" docs on deploy;
+      the app degrades with a clear message if it fails to load.
+    -->
+    <script
+      src="https://cdn.zama.ai/relayer-sdk-js/0.3.0/relayer-sdk-js.umd.cjs"
+    ></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

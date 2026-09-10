@@ -1,0 +1,45 @@
+name: lint-check-test
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  lint-check:
+    name: Lint and check types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Prepare tools
+        uses: pnpm/action-setup@v4
+      - name: Run linting and type checking
+        run: |
+          pnpm install
+          pnpm biome ci
+          pnpm typecheck
+  test-cover:
+    name: Test and report coverage
+    needs: lint-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Prepare tools
+        uses: pnpm/action-setup@v4
+      - name: Run tests with coverage
+        run: |
+          pnpm install
+          pnpm vitest --run --coverage

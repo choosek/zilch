@@ -1,0 +1,198 @@
+/**
+ * The wire contract between zilch's serverless API and its browser client.
+ *
+ * zilch pairs two confidentiality primitives on one action. A Blacklight
+ * *Covenant* seals a transfer instruction and opens it when a price or time
+ * condition fires; a Zama *confidential token* (ERC-7984) carries the amount as
+ * an encrypted handle that never becomes public. This module names the shapes
+ * both halves speak in.
+ *
+ * As with the covenant work these types descend from, large on-chain quantities
+ * (price thresholds, escrow) cross the wire as decimal strings and small ones
+ * (unix seconds, counts) as numbers, and the server sends a preformatted display
+ * string next to any raw value a person reads. The amount is deliberately absent
+ * from every shape here: it lives only in the browser and in Zama's ciphertext,
+ * and the server never sees it.
+ */
+
+/* ---- the covenant's release condition (the trigger) ---- */
+
+/** A price clause decoded from a sealed transfer's trigger. */
+export interface PriceClause {
+  asset: string;
+  op: string; // ">=" or "<="
+  threshold1e8: string;
+  thresholdUsd: string;
+}
+
+/** A time-window clause: unix seconds, both bounds present. */
+export interface WindowClause {
+  t1: number;
+  t2: number;
+}
+
+/** The decoded trigger of a sealed transfer. */
+export interface DecodedCondition {
+  mode: number; // 0 Private, 1 Public
+  price: PriceClause | null;
+  window: WindowClause | null;
+  sealed: boolean;
+  raw: string | null;
+  text: string; // e.g. "ETH ≥ $5,000" or "12 Jun 2026"
+}
+
+/* ---- the sealed instruction (the covenant payload) ---- */
+
+/**
+ * What a sealed transfer commits to, carried inside the covenant's sealed
+ * payload and revealed only when it opens. Note what is *not* here: the amount.
+ * The amount is an encrypted ERC-7984 handle moved at settlement, so it is
+ * concealed by the token before the covenant opens and by Zama forever after.
+ * `amountCommitment` is an optional `keccak256(amount‖salt)` that binds the
+ * amount at seal time without revealing it.
+ */
+export interface Instruction {
+  recipient: string;
+  token: string; // the ERC-7984 confidential token address
+  tokenSymbol: string | null;
+  memo: string | null;
+  amountCommitment: string | null;
+}
+
+/** A sealed transfer's outcome, forced by its covenant's end-state: it is still
+ *  `sealed` while the trigger has not fired, `open` once the covenant resolves
+ *  and the instruction is revealed, and `expired` if the deadline passed
+ *  untouched — in which case it settles to nothing (zilch). */
+export type TransferOutcome = "sealed" | "open" | "expired";
+
+/** One sealed transfer, as shown in the feed and at the top of its detail. */
+export interface SealedTransfer {
+  id: string;
+  author: string | null;
+  condition: DecodedCondition;
+  deadline: number;
+  postedAt: number | null;
+  resolvedAt: number | null;
+  outcome: TransferOutcome;
+  k: number;
+  m: number;
+  sharesPosted: number;
+  commit: string;
+  instruction: Instruction | null; // revealed only once open
+}
+
+/** `GET /api/feed`. */
+export interface FeedResponse {
+  nowUnix: number;
+  total: number;
+  counts: { sealed: number; open: number; expired: number };
+  transfers: SealedTransfer[];
+}
+
+/** One event in a sealed transfer's timeline. */
+export interface TimelineEntry {
+  type: string;
+  block: number;
+  logIndex: number;
+  txHash: string;
+}
+
+/** One committee slot backing a sealed transfer. */
+export interface CommitteeSlot {
+  slot: number;
+  keyId: string | null;
+  nodeId: string | null;
+  shared: boolean;
+}
+
+/** `GET /api/transfer?id=N`. */
+export interface TransferDetail extends SealedTransfer {
+  postTx: string | null;
+  timeline: TimelineEntry[];
+  committee: CommitteeSlot[];
+  spotUsd: string | null;
+}
+
+/* ---- Zama confidential tokens (read from Zama's official registry) ---- */
+
+/** One confidential-token pairing from Zama's Confidential Token Wrappers
+ *  Registry: an ERC-20 underlying and its ERC-7984 confidential wrapper. */
+export interface TokenPair {
+  symbol: string; // the confidential token's symbol, e.g. "cUSDC"
+  confidentialToken: string;
+  underlying: string;
+  underlyingSymbol: string;
+  decimals: number;
+  hasFaucet: boolean;
+}
+
+/** `GET /api/tokens`. */
+export interface TokensResponse {
+  registry: string;
+  tokens: TokenPair[];
+}
+
+/* ---- building transactions (the server holds the ABIs; the wallet signs) ---- */
+
+/** A ready transaction for the wallet to send. */
+export interface Tx {
+  to: string;
+  data: string;
+  value: string;
+  chainId: number;
+}
+
+/** `POST /api/tx` — build one confidential-token transaction. `send` carries the
+ *  Zama-produced ciphertext handle and input proof; `faucet` and `wrap` do not. */
+export interface TxRequest {
+  kind: "faucet" | "approve" | "wrap" | "send";
+  token: string; // confidential token address (or its underlying, for faucet/approve)
+  amount?: string; // base units, for faucet/wrap (never for send)
+  recipient?: string; // for send
+  handle?: string; // for send: the external euint64 handle from Zama
+  inputProof?: string; // for send: the Zama input proof
+  from: string;
+}
+
+/** `POST /api/seal` request: the transfer to seal into a covenant. */
+export interface SealRequest {
+  recipient: string;
+  token: string;
+  tokenSymbol?: string;
+  memo?: string;
+  amountCommitment?: string;
+  asset: string;
+  op: string; // ">=" or "<="
+  targetUsd: string;
+  deadlineUnix: number;
+  author: string;
+}
+
+/** `POST /api/seal` response: the transactions the wallet sends to seal it. */
+export interface SealResponse {
+  approve: Tx | null;
+  post: Tx;
+  commit: string;
+  committee: { m: number; k: number; nodeIds: string[] };
+  deadlineUnix: number;
+  note: string;
+}
+
+/* ---- keeper actions on a sealed transfer's covenant ---- */
+
+export type KeeperAction = "reveal" | "settle";
+
+/** `POST /api/keeper-tx`. */
+export interface KeeperTxResponse {
+  action: KeeperAction;
+  id: string;
+  tx: Tx;
+  simulated: string;
+  note: string;
+}
+
+/** The uniform error body every route returns on failure. */
+export interface ErrorResponse {
+  error: string;
+  detail?: string;
+}

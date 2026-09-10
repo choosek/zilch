@@ -1,0 +1,42 @@
+{
+  "name": "zilch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A template dapp that pairs Zama confidential amounts with Nillion Blacklight Covenants on Ethereum: seal a transfer instruction that opens itself when price or time says so, while the amount stays encrypted. Sepolia.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "dev:local": "tsx scripts/dev-server.ts",
+    "build": "tsx scripts/build-client.ts",
+    "lint": "biome check",
+    "format": "biome format --write",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "install-hooks": "lefthook install",
+    "deploy": "pnpm build && vercel --prod"
+  },
+  "dependencies": {
+    "@nillion/blacklight-l1-sdk": "^0.4.1",
+    "viem": "^2.22.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.0.5",
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@commitlint/types": "^19.8.1",
+    "@types/node": "^24.0.4",
+    "@vercel/node": "^10.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "esbuild": "^0.24.0",
+    "lefthook": "^1.11.14",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.12.2"
+}
