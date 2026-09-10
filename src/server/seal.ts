@@ -165,6 +165,19 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
     author,
   );
 
+  // Atomic settlement: wire in the settlement hook only when the client opts in
+  // (`useHook`) AND a valid ZILCH_HOOK is configured. Otherwise the covenant
+  // posts with no hook, exactly as before — so a fresh deployment is unaffected.
+  const configuredHook = process.env.ZILCH_HOOK;
+  const useHook =
+    req.useHook === true &&
+    typeof configuredHook === "string" &&
+    isAddress(configuredHook);
+  const hookAddress = useHook ? (configuredHook as `0x${string}`) : zeroAddress;
+  const hookGasLimit = useHook
+    ? Number(process.env.ZILCH_HOOK_GAS ?? "3000000")
+    : 0;
+
   const postData = encodeFunctionData({
     abi: triggerMarketAbi,
     functionName: "post_trigger",
@@ -177,11 +190,11 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
         ttl,
         commit: sealed.commit,
         ceiling,
-        hook: zeroAddress,
+        hook: hookAddress,
         t1: 0n,
         t2: 0n,
         publicCondition: toHex(sealed.publicCondition ?? record),
-        hookGasLimit: 0,
+        hookGasLimit,
         retryWindowSecs: 0,
         noBounty: false,
       },

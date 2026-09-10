@@ -156,6 +156,9 @@ export interface SealRequest {
   targetUsd: string;
   deadlineUnix: number;
   author: string;
+  /** When true (and the server has ZILCH_HOOK set), the covenant is posted with
+   *  the settlement hook wired in for atomic release. */
+  useHook?: boolean;
 }
 
 /** `POST /api/seal` response: the transactions the wallet sends to seal it. */
@@ -182,6 +185,17 @@ export interface KeeperTxResponse {
   tx: Tx;
   simulated: string;
   note: string;
+}
+
+/** `GET /api/config` — settlement-hook deployment configuration. */
+export interface ConfigResponse {
+  chainId: number;
+  /** The Blacklight TriggerMarket address (the hook's constructor argument). */
+  market: string | null;
+  /** The configured settlement hook address, or null if none. */
+  hook: string | null;
+  /** Whether atomic settlement is enabled (a hook is configured). */
+  atomic: boolean;
 }
 
 /** The uniform error body every route returns on failure. */

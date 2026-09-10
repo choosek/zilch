@@ -54,6 +54,8 @@ zilch deliberately deploys nothing of its own. Zama's persistence — the fact t
 
 There is exactly one honest cost to owning no contract: **settlement is not atomic.** A Covenant cannot itself call `confidentialTransfer` when it opens — that bridge is a *hook*, and a hook is a contract. So in zilch the Covenant opening reveals the instruction, and the confidential transfer is a second, browser-signed step at settlement. Everything else is complete. A roughly thirty-line settlement hook (an `onReveal` that pulls a pre-authorised confidential transfer) is the upgrade that makes it atomic; the demo stands on its own without it, and this is the only place a contract would change the shape of the flow.
 
+`ZilchSettlementHook` — an `onReveal` that escrows the confidential amount when a transfer is sealed and releases it to the sealed recipient *inside the reveal transaction* — lives in [`contracts/`](contracts/README.md). With no `ZILCH_HOOK` configured, zilch runs exactly as described above — contract-free, with manual settlement. It is also **unaudited**: the reference the demo points at, not a validated dependency. See [contracts/README.md](contracts/README.md) for the design, deployment, and trust model.
+
 ## Architecture
 
 zilch is a static single-page client plus a handful of stateless serverless functions — no database, no background workers, no persisted state. Reading Covenants and building the Covenant calldata happen on the server; the confidential-token half happens entirely in the browser via Zama's v3 SDK, which the client bundles (viem + `@zama-fhe/sdk`, its FHE WebAssembly inlined at build time by Vite). The wallet is touched only to sign.
@@ -131,6 +133,8 @@ Every value has a working default; override via environment variables.
 | `ZILCH_TOKEN_SYMBOL`      | `cUSDC`                                         | display symbol for the confidential token      |
 | `ZILCH_UNDERLYING_SYMBOL` | `USDC`                                          | display symbol for the underlying              |
 | `ZILCH_TOKEN_DECIMALS`    | `6`                                             | decimals for amount formatting                 |
+| `ZILCH_HOOK`              | *(unset)*                                       | optional settlement-hook address; enables atomic mode |
+| `ZILCH_HOOK_GAS`          | `3000000`                                       | gas budget for the reveal-time hook call       |
 
 The confidential-token half runs on Zama's [v3 SDK](https://docs.zama.org/protocol/sdk) (`@zama-fhe/sdk`), bundled into the client. It targets the `sepolia` chain preset from `@zama-fhe/sdk/chains`, which carries Zama's current, **open** testnet relayer (`https://relayer.testnet.zama.org/v2` — no API key, no proxy on Sepolia), so there is nothing to configure for the amount half beyond the token address above. Mainnet, by contrast, requires an `x-api-key`; a production deployment would set that up (Zama's docs cover a backend-proxy or direct-key setup). The SDK's FHE WebAssembly is inlined into the bundle at build time by Vite, so no `.wasm` files are served and there is no CDN dependency.
 

@@ -16,7 +16,13 @@ import { ZamaSDK } from "@zama-fhe/sdk";
 import { sepolia as sepoliaFhe } from "@zama-fhe/sdk/chains";
 import { createConfig } from "@zama-fhe/sdk/viem";
 import { web } from "@zama-fhe/sdk/web";
-import { createPublicClient, createWalletClient, custom, http } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  custom,
+  http,
+  isAddress,
+} from "viem";
 import { sepolia } from "viem/chains";
 import {
   escapeHtml,
@@ -26,6 +32,7 @@ import {
   truncateAddress,
 } from "../core/format.js";
 import type {
+  ConfigResponse,
   FeedResponse,
   KeeperAction,
   KeeperTxResponse,
@@ -37,6 +44,7 @@ import type {
   TransferDetail,
   Tx,
 } from "../shared/types.js";
+import { HOOK_ABI, HOOK_BYTECODE } from "./hookArtifact.js";
 
 /* ------------------------------------------------------------------ */
 /* Constants and small helpers                                        */
@@ -136,6 +144,45 @@ const MINT_ABI = [
   },
 ] as const;
 
+const SET_OPERATOR_ABI = [
+  {
+    type: "function",
+    name: "setOperator",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "operator", type: "address" },
+      { name: "until", type: "uint48" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+async function getConfig(): Promise<ConfigResponse> {
+  const res = await fetch("/api/config", {
+    headers: { accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`config ${res.status}`);
+  }
+  return (await res.json()) as ConfigResponse;
+}
+
+let configCache: ConfigResponse | null = null;
+/** Memoized `/api/config`, so compose and the detail view can check atomic mode
+ *  without refetching on every render. */
+async function cachedConfig(): Promise<ConfigResponse> {
+  if (!configCache) {
+    configCache = await getConfig();
+  }
+  return configCache;
+}
+
+/** A fresh 32-byte escrow id as a 0x-prefixed hex string. */
+function randomId(): `0x${string}` {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return `0x${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** A viem wallet client backed by the connected EIP-1193 provider. Used for the
  *  faucet mint and, inside the SDK config, for confidential writes. */
 function makeWalletClient() {
@@ -151,12 +198,14 @@ function makeWalletClient() {
 
 /** Wait for a submitted transaction to be mined, so a dependent transaction is
  *  estimated against the updated chain state (e.g. post after a NIL approval). */
-async function waitForReceipt(hash: string): Promise<void> {
+async function waitForReceipt(hash: string) {
   const publicClient = createPublicClient({
     chain: sepolia,
     transport: http(),
   });
-  await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+  return await publicClient.waitForTransactionReceipt({
+    hash: hash as `0x${string}`,
+  });
 }
 
 let sdkReady: Promise<ZamaSDK> | null = null;
@@ -390,7 +439,13 @@ function transferHtml(t: TransferDetail): string {
            <p class="muted">This transfer expired before its trigger fired. It settled to nothing — the instruction stays sealed for good.</p></div>`
         : `<div class="ipanel sealed"><div class="ilabel">Instruction</div>${redaction()}</div>`;
 
-  const settle = t.outcome === "open" && t.instruction ? settlePanel(t) : "";
+  const escrowId =
+    t.instruction?.amountCommitment ?? readStash(t.commit)?.escrowId ?? null;
+  const settle = escrowId
+    ? atomicPanel(escrowId, t.outcome)
+    : t.outcome === "open" && t.instruction
+      ? settlePanel(t)
+      : "";
 
   const spot = t.spotUsd
     ? `<div class="kv"><span class="k">Spot now</span><span class="v mono">${escapeHtml(t.spotUsd)}</span></div>`
@@ -462,6 +517,105 @@ function settlePanel(t: TransferDetail): string {
   </section>`;
 }
 
+/** For atomic transfers: a panel that reads the hook's escrow state and, while
+ *  the escrow is still held, offers the sender a refund. It never renders a
+ *  manual settle control — the hook releases the amount on reveal. */
+function atomicPanel(escrowId: string, outcome: string): string {
+  return `<section class="settle" id="atomic-panel" data-escrow="${escapeHtml(escrowId)}" data-outcome="${escapeHtml(outcome)}">
+    <div class="ilabel">Atomic settlement</div>
+    <p class="muted">This transfer's amount is escrowed in the settlement hook and is released to the
+    recipient inside the covenant's reveal transaction — there is no manual settlement step.</p>
+    <div class="status" id="atomic-status">Checking escrow…</div>
+    <div id="atomic-actions"></div>
+  </section>`;
+}
+
+async function hydrateEscrow(escrowId: string, outcome: string): Promise<void> {
+  const statusEl = document.getElementById("atomic-status");
+  const actionsEl = document.getElementById("atomic-actions");
+  if (!statusEl || !actionsEl) {
+    return;
+  }
+  let hook: string | null = null;
+  try {
+    hook = (await cachedConfig()).hook;
+  } catch {
+    // fall through to the not-configured message
+  }
+  if (!hook || !isAddress(hook)) {
+    statusEl.textContent =
+      "No settlement hook is configured here, so the escrow state can't be read.";
+    return;
+  }
+  try {
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http(),
+    });
+    const state = Number(
+      await publicClient.readContract({
+        address: hook as `0x${string}`,
+        abi: HOOK_ABI,
+        functionName: "escrowState",
+        args: [escrowId as `0x${string}`],
+      }),
+    );
+    // 0 none · 1 escrowed · 2 released · 3 refunded
+    if (state === 2) {
+      statusEl.innerHTML =
+        "✓ Settled atomically on reveal — the confidential amount was released to the recipient.";
+    } else if (state === 3) {
+      statusEl.textContent =
+        "Refunded — the escrowed amount was returned to the sender.";
+    } else if (state === 1) {
+      statusEl.textContent =
+        outcome === "open"
+          ? "Escrowed but not yet released. If the reveal did not release it, the sender can refund below."
+          : "Amount escrowed, awaiting the covenant. The sender can refund below at any time.";
+      actionsEl.innerHTML = `<button class="btn ghost" id="refund-btn">Refund to sender</button>
+        <div class="status" id="refund-status"></div>`;
+      document
+        .getElementById("refund-btn")
+        ?.addEventListener(
+          "click",
+          () => void doRefund(escrowId, hook as string),
+        );
+    } else {
+      statusEl.textContent =
+        "No escrow found for this transfer — the escrow step may not have completed at seal time.";
+    }
+  } catch (error) {
+    statusEl.textContent = message(error);
+  }
+}
+
+async function doRefund(escrowId: string, hook: string): Promise<void> {
+  const status = document.getElementById("refund-status");
+  try {
+    if (!ensureWallet()) {
+      return;
+    }
+    await ensureSepolia();
+    if (status) {
+      status.textContent = "Confirm the refund in your wallet…";
+    }
+    const walletClient = makeWalletClient();
+    const hash = await walletClient.writeContract({
+      address: hook as `0x${string}`,
+      abi: HOOK_ABI,
+      functionName: "refund",
+      args: [escrowId as `0x${string}`],
+    });
+    if (status) {
+      status.innerHTML = txDone("Refunded", hash);
+    }
+  } catch (error) {
+    if (status) {
+      status.textContent = message(error);
+    }
+  }
+}
+
 function committeeHtml(t: TransferDetail): string {
   if (!t.committee.length) {
     return `<p class="muted">No committee slots recorded.</p>`;
@@ -470,7 +624,7 @@ function committeeHtml(t: TransferDetail): string {
     .map(
       (slot) =>
         `<div class="slot ${slot.shared ? "on" : ""}"><span class="mono">#${slot.slot}</span>
-        <span class="mono tiny">${slot.nodeId ? `node ${escapeHtml(slot.nodeId)}` : "key " + escapeHtml(truncateAddress(slot.keyId))}</span>
+        <span class="mono tiny">${slot.nodeId ? `node ${escapeHtml(slot.nodeId)}` : `key ${escapeHtml(truncateAddress(slot.keyId))}`}</span>
         <span class="dot">${slot.shared ? "share in" : "waiting"}</span></div>`,
     )
     .join("")}</div>`;
@@ -519,6 +673,14 @@ function wireTransfer(t: TransferDetail): void {
   if (settleBtn && t.instruction) {
     const instruction = t.instruction;
     settleBtn.addEventListener("click", () => void doSettle(t, instruction));
+  }
+  const atomicPanelEl = document.getElementById("atomic-panel");
+  if (atomicPanelEl) {
+    const escrowId = atomicPanelEl.getAttribute("data-escrow") ?? "";
+    const outcome = atomicPanelEl.getAttribute("data-outcome") ?? "";
+    if (escrowId) {
+      void hydrateEscrow(escrowId, outcome);
+    }
   }
   const keeperBtn = document.getElementById("keeper-btn");
   if (keeperBtn) {
@@ -732,6 +894,10 @@ async function doSeal(pair: TokenPair): Promise<void> {
       throw new Error("pick a deadline");
     }
 
+    const cfg = await cachedConfig();
+    const atomic = cfg.atomic && cfg.hook !== null && isAddress(cfg.hook);
+    const escrowId = atomic ? randomId() : null;
+
     status.textContent = "Sealing the instruction and pricing the Covenant…";
     const built = await postJson<SealResponse>("/api/seal", {
       recipient,
@@ -743,17 +909,62 @@ async function doSeal(pair: TokenPair): Promise<void> {
       targetUsd,
       deadlineUnix,
       author: wallet.account,
+      ...(atomic ? { useHook: true, amountCommitment: escrowId } : {}),
     });
 
-    // Stash the amount locally so settlement can prefill it. It never leaves the
-    // browser; losing it only means re-entering the amount to settle.
+    // Stash the amount (and, in atomic mode, the escrow id) locally. It never
+    // leaves the browser; losing it only means re-entering the amount to settle,
+    // or — for an atomic transfer that expires unrevealed — needing the id to refund.
     writeStash(built.commit, {
       amount: amountHuman,
       token: pair.confidentialToken,
       recipient,
+      ...(escrowId ? { escrowId } : {}),
     });
 
     await ensureSepolia();
+
+    // Atomic settlement: escrow the confidential amount into the hook now, so the
+    // covenant's reveal can release it to the recipient in a single transaction.
+    if (atomic && escrowId && cfg.hook) {
+      const hook = cfg.hook as `0x${string}`;
+      const amountUnits = toBaseUnits(amountHuman, pair.decimals);
+      const walletClient = makeWalletClient();
+
+      status.textContent =
+        "Authorising the settlement hook to move your balance…";
+      const until = Math.floor(Date.now() / 1000) + 86_400;
+      const opHash = await walletClient.writeContract({
+        address: pair.confidentialToken as `0x${string}`,
+        abi: SET_OPERATOR_ABI,
+        functionName: "setOperator",
+        args: [hook, until],
+      });
+      await waitForReceipt(opHash);
+
+      status.textContent =
+        "Encrypting the amount for the hook and escrowing it…";
+      const sdk = await getSdk();
+      const enc = await sdk.encrypt({
+        values: [{ value: amountUnits, type: "euint64" }],
+        contractAddress: hook,
+        userAddress: wallet.account as `0x${string}`,
+      });
+      const escrowHash = await walletClient.writeContract({
+        address: hook,
+        abi: HOOK_ABI,
+        functionName: "createSealedTransfer",
+        args: [
+          escrowId,
+          pair.confidentialToken as `0x${string}`,
+          recipient as `0x${string}`,
+          enc.encryptedValues[0],
+          enc.inputProof,
+        ],
+      });
+      await waitForReceipt(escrowHash);
+    }
+
     if (built.approve) {
       status.textContent = "Approve NIL for the protocol fee…";
       const approveHash = await sendTx(built.approve);
@@ -778,7 +989,11 @@ async function doSeal(pair: TokenPair): Promise<void> {
     }
     status.textContent = "Post the Covenant to seal this transfer…";
     const hash = await sendTx(built.post);
-    status.innerHTML = `${txDone("Sealed", hash)} — it will appear in the feed shortly.`;
+    status.innerHTML = `${txDone("Sealed", hash)} — ${
+      atomic
+        ? "the amount is escrowed and auto-settles when the covenant opens."
+        : "it will appear in the feed shortly."
+    }`;
     window.setTimeout(() => go("?"), 3500);
   } catch (error) {
     status.textContent = message(error);
@@ -1012,6 +1227,9 @@ interface Stash {
   amount: string;
   token: string;
   recipient: string;
+  /** For atomic transfers, the escrow id — kept locally so the sender can
+   *  refund even if the covenant expires without ever revealing it. */
+  escrowId?: string;
 }
 
 function writeStash(commit: string, stash: Stash): void {
@@ -1076,6 +1294,168 @@ function updateStamp(): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* Deploy dashboard (settlement hook)                                 */
+/* ------------------------------------------------------------------ */
+
+let deployedHook: string | null = null;
+
+async function renderDeploy(): Promise<void> {
+  currentId = null;
+  stopAuto();
+  const view = $("view");
+  view.innerHTML = `<div class="loading">Loading configuration…</div>`;
+  let cfg: ConfigResponse | null = null;
+  let cfgError = "";
+  try {
+    cfg = await getConfig();
+  } catch (error) {
+    cfgError = message(error);
+  }
+  const market = cfg?.market ?? "";
+  const existing = cfg?.hook ?? "";
+  view.innerHTML = `
+    <a class="back" href="?" id="back">← all transfers</a>
+    <h2 class="ph">Deploy the Settlement Hook</h2>
+    <p class="muted wide">This optional contract makes settlement <b>atomic</b>. The confidential amount is
+    escrowed when a transfer is sealed and released to the sealed recipient <i>inside the Covenant's reveal
+    transaction</i> — so the payment happens if and only if the Covenant opens, for the escrowed (still
+    encrypted) amount, to the sealed recipient. Without it, revealing only surfaces the instruction and the
+    transfer is a separate manual step bound to the reveal by nothing but app logic.</p>
+    <div class="errbox" style="margin:0 0 1.25rem">
+      <b>Unaudited, untested reference contract.</b>
+      <p class="muted">Deploying here is safe — a deployment succeeds whenever the contract compiles — but its
+      on-chain behaviour has not been validated. Deploy to <b>Sepolia</b>, exercise escrow → reveal → release
+      and the refund path on testnet, and review the source before any real use. Design and caveats:
+      <span class="mono">contracts/README.md</span>.</p>
+    </div>
+    <div class="grid3">
+      <div class="ipanel">
+        <div class="step">1</div><div class="ilabel">Deploy</div>
+        <p class="muted">Deploy <span class="mono">ZilchSettlementHook</span> with the Blacklight market as its
+        constructor argument.</p>
+        <label class="tiny muted">TriggerMarket (constructor arg)</label>
+        <input id="dep-market" class="in mono" placeholder="0x…" value="${escapeHtml(market)}" />
+        <button class="btn solid" id="dep-btn">Deploy settlement hook</button>
+        <div class="status" id="dep-status">${
+          cfgError
+            ? escapeHtml(
+                `Could not resolve the market (${cfgError}). Paste it manually.`,
+              )
+            : ""
+        }</div>
+      </div>
+      <div class="ipanel">
+        <div class="step">2</div><div class="ilabel">Validate</div>
+        <p class="muted">Confirm an address is a deployed contract on this chain before you trust it.</p>
+        <label class="tiny muted">Hook address</label>
+        <input id="val-addr" class="in mono" placeholder="0x…" value="${escapeHtml(existing)}" />
+        <button class="btn ghost" id="val-btn">Check on-chain</button>
+        <div class="status" id="val-status"></div>
+      </div>
+      <div class="ipanel">
+        <div class="step">3</div><div class="ilabel">Configure</div>
+        <p class="muted">Set this in your environment, then redeploy the app to enable atomic mode.</p>
+        <div class="status" id="cfg-out">${
+          existing
+            ? `Currently configured: <span class="mono">${escapeHtml(existing)}</span>`
+            : "No hook configured yet."
+        }</div>
+        <button class="btn ghost" id="cfg-btn">Generate config</button>
+        <div class="status" id="cfg-gen"></div>
+      </div>
+    </div>
+    <p class="muted wide tiny">Chain id <span class="mono">${cfg?.chainId ?? "?"}</span>. Atomic settlement is
+    currently <b>${cfg?.atomic ? "enabled" : "disabled"}</b>. After configuring the hook, wiring the client-side
+    escrow and auto-settle flow is the final step (see the README); enable it once the deployed contract is
+    validated on-chain.</p>`;
+  $("back").addEventListener("click", (event) => {
+    event.preventDefault();
+    go("?");
+  });
+  $("dep-btn").addEventListener("click", () => void doDeployHook());
+  $("val-btn").addEventListener("click", () => void doValidateHook());
+  $("cfg-btn").addEventListener("click", doGenerateConfig);
+}
+
+async function doDeployHook(): Promise<void> {
+  const status = $("dep-status");
+  try {
+    if (!ensureWallet()) {
+      return;
+    }
+    await ensureSepolia();
+    const market = ($("dep-market") as HTMLInputElement).value.trim();
+    if (!isAddress(market)) {
+      status.textContent = "Enter a valid market address.";
+      return;
+    }
+    status.textContent = "Confirm the deployment in your wallet…";
+    const walletClient = makeWalletClient();
+    const hash = await walletClient.deployContract({
+      abi: HOOK_ABI,
+      bytecode: HOOK_BYTECODE,
+      args: [market as `0x${string}`],
+    });
+    status.innerHTML = `${txDone("Deployment sent", hash)} — waiting for the receipt…`;
+    const receipt = await waitForReceipt(hash);
+    const addr = receipt.contractAddress;
+    if (!addr) {
+      status.textContent =
+        "Deployed, but the receipt carried no contract address.";
+      return;
+    }
+    deployedHook = addr;
+    ($("val-addr") as HTMLInputElement).value = addr;
+    status.innerHTML = `Deployed at <span class="mono">${escapeHtml(addr)}</span>. Validate it, then generate the config.`;
+  } catch (error) {
+    status.textContent = message(error);
+  }
+}
+
+async function doValidateHook(): Promise<void> {
+  const status = $("val-status");
+  try {
+    const addr = ($("val-addr") as HTMLInputElement).value.trim();
+    if (!isAddress(addr)) {
+      status.textContent = "Enter a valid address.";
+      return;
+    }
+    status.textContent = "Checking…";
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http(),
+    });
+    const code = await publicClient.getCode({ address: addr as `0x${string}` });
+    if (code && code !== "0x") {
+      deployedHook = addr;
+      status.innerHTML = `✓ Contract found (${Math.floor((code.length - 2) / 2)} bytes of runtime bytecode).`;
+    } else {
+      status.textContent = "No contract code at that address on this chain.";
+    }
+  } catch (error) {
+    status.textContent = message(error);
+  }
+}
+
+function doGenerateConfig(): void {
+  const gen = $("cfg-gen");
+  const addr = (
+    deployedHook ?? ($("val-addr") as HTMLInputElement).value
+  ).trim();
+  if (!isAddress(addr)) {
+    gen.textContent = "Deploy or validate a hook address first.";
+    return;
+  }
+  const env = `ZILCH_HOOK=${addr}\n# Optional: gas budget for the reveal-time hook call (default 3000000)\n# ZILCH_HOOK_GAS=3000000\n`;
+  const url = URL.createObjectURL(new Blob([env], { type: "text/plain" }));
+  gen.innerHTML = `
+    <p class="muted tiny">Add to <span class="mono">.env.local</span> for local dev, or set as a project
+    environment variable in Vercel (Settings → Environment Variables), then redeploy.</p>
+    <pre class="mono" style="white-space:pre-wrap;word-break:break-all;padding:.6rem .7rem;border-radius:8px;font-size:.8rem">${escapeHtml(env)}</pre>
+    <a class="btn ghost" href="${url}" download=".env.local">Download .env.local</a>`;
+}
+
+/* ------------------------------------------------------------------ */
 /* Router                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1095,6 +1475,8 @@ async function route(): Promise<void> {
     await renderFund();
   } else if (view === "compose") {
     await renderCompose();
+  } else if (view === "deploy") {
+    await renderDeploy();
   } else {
     await loadFeed();
   }
@@ -1175,6 +1557,13 @@ function init(): void {
     event.preventDefault();
     go("?view=compose");
   });
+  const deployLink = document.getElementById("nav-deploy");
+  if (deployLink) {
+    deployLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      go("?view=deploy");
+    });
+  }
   const closer = document.getElementById("wallet-close");
   if (closer) {
     closer.addEventListener("click", closeWalletModal);
