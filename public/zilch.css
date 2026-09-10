@@ -232,6 +232,9 @@ a:hover {
 .hero .hl {
   color: var(--yellow);
 }
+.hero .hl-cov {
+  color: var(--blue-ink);
+}
 .hero p {
   color: var(--muted);
   max-width: 46ch;
@@ -268,7 +271,10 @@ a:hover {
   color: var(--blue-ink);
 }
 .tally .t:nth-child(2) .n {
-  color: var(--yellow);
+  color: var(--ink);
+}
+.tally .t:nth-child(3) .n {
+  color: var(--muted);
 }
 .tally .l {
   display: block;

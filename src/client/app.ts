@@ -369,7 +369,7 @@ function feedHtml(data: FeedResponse): string {
   return `
     <section class="hero">
       <div class="hero-copy">
-        <h1>Sealed <span class="hl">Confidential</span> Transfers</h1>
+        <h1><span class="hl-cov">Sealed</span> <span class="hl">Confidential</span> Transfers</h1>
         <p>Payments whose <b>amounts are invisible</b> and whose <b>instructions are sealed
         envelopes</b> that open only when the market or the clock dictates to do so.</p>
       </div>
@@ -380,8 +380,8 @@ function feedHtml(data: FeedResponse): string {
       </div>
     </section>
     <div class="bar-actions">
-      <button class="btn ghost" id="fund-2">Fund a Balance</button>
-      <button class="btn solid" id="new-2">Seal a Transfer</button>
+      <button class="btn solid" id="fund-2">Fund a Balance</button>
+      <button class="btn ghost" id="new-2">Seal a Transfer</button>
       <span class="stamp" id="stamp"></span>
     </div>
     <div class="feed">${rows || '<div class="empty">No sealed transfers yet. Seal the first one.</div>'}</div>`;
@@ -421,8 +421,9 @@ async function loadTransfer(
     const t = await getJson<TransferDetail>(
       `/api/transfer?id=${encodeURIComponent(id)}`,
     );
+    const cfg = await cachedConfig().catch(() => null);
     clockOffset = 0; // detail carries no now; keep local clock
-    view.innerHTML = transferHtml(t);
+    view.innerHTML = transferHtml(t, cfg?.atomic === true);
     wireTransfer(t);
     startTransferAuto(id);
   } catch (error) {
@@ -430,7 +431,7 @@ async function loadTransfer(
   }
 }
 
-function transferHtml(t: TransferDetail): string {
+function transferHtml(t: TransferDetail, atomic: boolean): string {
   const revealed =
     t.outcome === "open" && t.instruction
       ? instructionPanel(t.instruction)
@@ -441,9 +442,12 @@ function transferHtml(t: TransferDetail): string {
 
   const escrowId =
     t.instruction?.amountCommitment ?? readStash(t.commit)?.escrowId ?? null;
+  // Once a settlement hook is configured, settlement is atomic on reveal and the
+  // manual settle panel is never offered — an escrowed transfer must not be paid
+  // twice. The manual panel survives only for hookless deployments.
   const settle = escrowId
     ? atomicPanel(escrowId, t.outcome)
-    : t.outcome === "open" && t.instruction
+    : !atomic && t.outcome === "open" && t.instruction
       ? settlePanel(t)
       : "";
 
