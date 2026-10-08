@@ -19,7 +19,7 @@ import {
   bytesToHex,
   fetchShares,
   reconstructLocally,
-} from "@nillion/blacklight-l1-sdk";
+} from "@nillion/covenants-sdk";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { encodeFunctionData } from "viem";
 import {
@@ -70,7 +70,7 @@ export default async function handler(
   if (action === "settle") {
     data = encodeFunctionData({
       abi: triggerMarketAbi,
-      functionName: "settle_expired",
+      functionName: "settleExpired",
       args: [id],
     });
     note = "Closes out the expired transfer and releases the covenant escrow.";
@@ -105,7 +105,7 @@ export default async function handler(
     }
     data = encodeFunctionData({
       abi: triggerMarketAbi,
-      functionName: "post_result",
+      functionName: "postResult",
       args: [
         id,
         bytesToHex(reconstruction.plaintext),

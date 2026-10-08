@@ -1,14 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "pnpm build",
+  "buildCommand": "npm run build",
   "outputDirectory": "public",
   "cleanUrls": true,
   "trailingSlash": false,
   "functions": {
     "api/*.ts": {
       "maxDuration": 30,
-      "includeFiles": "node_modules/@nillion/blacklight-l1-sdk/dist/wasm/**"
+      "includeFiles": "node_modules/@nillion/covenants-sdk/dist/wasm/**"
     }
   },
   "headers": [

@@ -22,7 +22,7 @@ import {
   protocolConfigAbi,
   stakingAbi,
   triggerMarketAbi,
-} from "@nillion/blacklight-l1-sdk";
+} from "@nillion/covenants-sdk";
 import { type Abi, decodeErrorResult } from "viem";
 import { describeCondition } from "../core/condition.js";
 import type { DecodedCondition } from "../shared/types.js";

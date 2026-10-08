@@ -1,7 +1,7 @@
 /**
  * Server-side chain access for the `/api` routes.
  *
- * Every use of `@nillion/blacklight-l1-sdk` and `viem` is confined to the server,
+ * Every use of `@nillion/covenants-sdk` and `viem` is confined to the server,
  * for two reasons the project depends on: the SDK's event-reading, reconstruction,
  * and price surfaces are Node-only by design, and keeping them here means the
  * browser bundle ships no contract ABIs and no crypto — the client only ever reads
@@ -19,7 +19,7 @@ import {
   protocolConfigAbi,
   resolveAddresses,
   triggerMarketAbi,
-} from "@nillion/blacklight-l1-sdk";
+} from "@nillion/covenants-sdk";
 import {
   type AbiEvent,
   type Chain,
@@ -29,7 +29,7 @@ import {
   type PublicClient,
   type Transport,
 } from "viem";
-import { sepolia } from "viem/chains";
+import { mainnet } from "viem/chains";
 
 export { protocolConfigAbi, triggerMarketAbi };
 
@@ -38,19 +38,19 @@ export { protocolConfigAbi, triggerMarketAbi };
  *  can never be served from a stale address file. Overridable only to follow a
  *  future redeploy. */
 export const C0 =
-  process.env.BLACKLIGHT_CONFIG ?? "0xebB338689fB32317DDFD8282F8a42dcA6271cB2d";
+  process.env.CONFIG_ADDRESS ?? "0xa75716772c17818A73104344b5A8888ae24ADc03";
 
-/** Sepolia. */
-export const CHAIN_ID = 11155111;
+/** Ethereum mainnet. */
+export const CHAIN_ID = 1;
 
 /** `HOOK_ACK == bytes4(keccak256("onReveal(uint256,bytes)"))`. A settlement hook
  *  returns this to acknowledge a reveal; anything else means it declined. */
 export const HOOK_ACK = "0xd8e071b6";
 
-/** A public Sepolia endpoint by default; point at a paid/authenticated provider
- *  with `SEPOLIA_RPC_URL`. Server-side only, so no CORS and no exposed key. */
-const RPC_URL =
-  process.env.SEPOLIA_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com";
+/** A public mainnet endpoint by default; point at a paid/authenticated provider
+ *  with `RPC_URL` (public endpoints often prune logs, which the SDK warns about).
+ *  Server-side only, so no CORS and no exposed key. */
+const RPC_URL = process.env.RPC_URL ?? "https://ethereum-rpc.publicnode.com";
 
 /** How far back the `TriggerPosted`/`SharePosted` scans look. The SDK's liveness
  *  note puts ~1,800 blocks inside every surveyed provider's `eth_getLogs` cap;
@@ -68,7 +68,7 @@ let cachedClient: PublicClient<Transport, Chain> | null = null;
 export function client(): PublicClient<Transport, Chain> {
   if (!cachedClient) {
     cachedClient = createPublicClient({
-      chain: sepolia,
+      chain: mainnet,
       transport: http(RPC_URL, { batch: true }),
     });
   }

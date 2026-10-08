@@ -20,13 +20,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Prepare tools
-        uses: pnpm/action-setup@v4
+          cache: "npm"
       - name: Run linting and type checking
         run: |
-          pnpm install
-          pnpm biome ci
-          pnpm typecheck
+          npm ci
+          npx biome ci
+          npm run typecheck
   test-cover:
     name: Test and report coverage
     needs: lint-check
@@ -37,9 +36,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Prepare tools
-        uses: pnpm/action-setup@v4
+          cache: "npm"
       - name: Run tests with coverage
         run: |
-          pnpm install
-          pnpm vitest --run --coverage
+          npm ci
+          npx vitest --run --coverage

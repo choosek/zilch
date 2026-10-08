@@ -29,7 +29,7 @@ import {
   seal,
   selectCommittee,
   suggestCeiling,
-} from "@nillion/blacklight-l1-sdk";
+} from "@nillion/covenants-sdk";
 import {
   encodeFunctionData,
   formatEther,
@@ -58,8 +58,6 @@ const ASSET_IDS: Record<string, number> = {
   BTC: 1,
   ETH: 2,
   SOL: 3,
-  LINK: 4,
-  XRP: 5,
   USDT: 6,
 };
 
@@ -185,7 +183,7 @@ export async function buildSeal(req: SealRequest): Promise<SealResponse> {
 
   const postData = encodeFunctionData({
     abi: triggerMarketAbi,
-    functionName: "post_trigger",
+    functionName: "postTrigger",
     args: [
       {
         mode: 1,

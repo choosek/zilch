@@ -15,7 +15,7 @@ import {
   fetchCandidates,
   hexToBytes,
   NONCE_BYTES,
-} from "@nillion/blacklight-l1-sdk";
+} from "@nillion/covenants-sdk";
 import type { PublicClient } from "viem";
 import { decodeInstruction } from "../core/instruction.js";
 import { transferOutcome } from "../core/transfer.js";
@@ -43,8 +43,6 @@ const ASSET_IDS: Record<string, number> = {
   BTC: 1,
   ETH: 2,
   SOL: 3,
-  LINK: 4,
-  XRP: 5,
   USDT: 6,
 };
 
@@ -103,9 +101,9 @@ async function chainNow(pub: PublicClient): Promise<number> {
 }
 
 /** token address → confidential symbol, from the configured token set. */
-function symbolByToken(): Map<string, string> {
+async function symbolByToken(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  for (const token of listTokens().tokens) {
+  for (const token of (await listTokens()).tokens) {
     map.set(token.confidentialToken.toLowerCase(), token.symbol);
   }
   return map;
@@ -163,7 +161,7 @@ export async function readFeed(limit: number): Promise<FeedResponse> {
     ...chosen.map((l) => l.blockNumber),
     ...resolvedLogs.map((l) => l.blockNumber),
   ]);
-  const symbols = symbolByToken();
+  const symbols = await symbolByToken();
 
   const transfers = await Promise.all(
     chosen.map(async (log): Promise<SealedTransfer> => {
@@ -303,7 +301,7 @@ export async function readTransfer(id: bigint): Promise<TransferDetail | null> {
     resolvedAt = times.get(resolvedLog.blockNumber.toString()) ?? null;
     instruction = instructionFromPlaintext(
       fieldHex(resolvedLog.args.plaintext) ?? "0x",
-      symbolByToken(),
+      await symbolByToken(),
     );
   }
 
@@ -357,7 +355,7 @@ async function spotFor(asset: string | null): Promise<string | null> {
     return null;
   }
   try {
-    const { fetchSpotMedian } = await import("@nillion/blacklight-l1-sdk");
+    const { fetchSpotMedian } = await import("@nillion/covenants-sdk");
     return formatSpot((await fetchSpotMedian(id)).price1e8);
   } catch {
     return null;

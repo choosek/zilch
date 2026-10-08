@@ -13,7 +13,7 @@
  */
 
 import { ZamaSDK } from "@zama-fhe/sdk";
-import { sepolia as sepoliaFhe } from "@zama-fhe/sdk/chains";
+import { mainnet as mainnetFhe } from "@zama-fhe/sdk/chains";
 import { createConfig } from "@zama-fhe/sdk/viem";
 import { web } from "@zama-fhe/sdk/web";
 import {
@@ -23,7 +23,7 @@ import {
   http,
   isAddress,
 } from "viem";
-import { sepolia } from "viem/chains";
+import { mainnet } from "viem/chains";
 import {
   escapeHtml,
   formatDateUtc,
@@ -50,9 +50,9 @@ import { HOOK_ABI, HOOK_BYTECODE } from "./hookArtifact.js";
 /* Constants and small helpers                                        */
 /* ------------------------------------------------------------------ */
 
-const SEPOLIA_HEX = "0xaa36a7"; // 11155111
-const EXPLORER = "https://sepolia.etherscan.io";
-const REFRESH_MS = 12000; // Sepolia's ~12s block time
+const MAINNET_HEX = "0x1"; // 1
+const EXPLORER = "https://etherscan.io";
+const REFRESH_MS = 12000; // mainnet's ~12s block time
 
 /** Chain time minus local time, learned at each fetch, so countdowns tick
  *  against the chain's clock rather than the browser's. */
@@ -124,7 +124,7 @@ function fromBaseUnits(base: string | bigint, decimals: number): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* Zama v3 SDK (bundled; talks to the open Sepolia relayer)           */
+/* Zama v3 SDK (bundled; talks to the open mainnet relayer)           */
 /* ------------------------------------------------------------------ */
 
 /** A confidential-token wrapper handle, as returned by `createWrappedToken`. */
@@ -191,7 +191,7 @@ function makeWalletClient() {
   }
   return createWalletClient({
     account: wallet.account as `0x${string}`,
-    chain: sepolia,
+    chain: mainnet,
     transport: custom(wallet.provider),
   });
 }
@@ -200,7 +200,7 @@ function makeWalletClient() {
  *  estimated against the updated chain state (e.g. post after a NIL approval). */
 async function waitForReceipt(hash: string) {
   const publicClient = createPublicClient({
-    chain: sepolia,
+    chain: mainnet,
     transport: http(),
   });
   return await publicClient.waitForTransactionReceipt({
@@ -214,8 +214,10 @@ let sdkAccountKey: string | null = null;
 /**
  * Build the Zama SDK once for the connected wallet, rebuilding if the account
  * changes. The wallet's provider backs a viem wallet client; reads use a public
- * Sepolia client. The `sepolia` chain preset carries the current, open testnet
- * relayer (`relayer.testnet.zama.org/v2`), so no API key or proxy is needed.
+ * mainnet client. The `mainnet` chain preset carries the open mainnet relayer
+ * (`relayer.mainnet.zama.org`), which requires a Zama API key. The client points
+ * its relayer at this app's own `/api/relayer` proxy, which injects the key from
+ * `ZAMA_RELAYER_API_KEY` server-side, so the key never ships in the bundle.
  */
 async function getSdk(): Promise<ZamaSDK> {
   if (!wallet.provider || !wallet.account) {
@@ -229,14 +231,23 @@ async function getSdk(): Promise<ZamaSDK> {
   const walletClient = makeWalletClient();
   sdkReady = (async () => {
     const publicClient = createPublicClient({
-      chain: sepolia,
+      chain: mainnet,
       transport: http(),
     });
+    // Route the relayer through this app's own /api/relayer proxy, which injects
+    // the Zama mainnet API key server-side (see api/relayer/[...path].ts), so the
+    // key never reaches the browser bundle.
+    const relayerChain = {
+      ...mainnetFhe,
+      relayerUrl: `${location.origin}/api/relayer`,
+    };
     const config = createConfig({
-      chains: [sepoliaFhe],
+      chains: [relayerChain],
       publicClient,
       walletClient,
-      relayers: { [sepoliaFhe.id]: web() },
+      relayers: {
+        [relayerChain.id]: web(),
+      },
     });
     return new ZamaSDK(config);
   })();
@@ -553,7 +564,7 @@ async function hydrateEscrow(escrowId: string, outcome: string): Promise<void> {
   }
   try {
     const publicClient = createPublicClient({
-      chain: sepolia,
+      chain: mainnet,
       transport: http(),
     });
     const state = Number(
@@ -599,7 +610,7 @@ async function doRefund(escrowId: string, hook: string): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     if (status) {
       status.textContent = "Confirm the refund in your wallet…";
     }
@@ -715,29 +726,35 @@ async function renderFund(): Promise<void> {
     view.innerHTML = errorHtml("Could not load tokens", error);
     return;
   }
-  view.innerHTML = `
-    <a class="back" href="?" id="back">← all transfers</a>
-    <h2 class="ph">Fund Confidential Balance</h2>
-    <p class="muted wide">Three steps leveraging Zama's already-deployed Sepolia contracts.
-    Mint the mock underlying, wrap it into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your
-    balance back (something only you can do).</p>
-    <div class="grid3">
-      <div class="ipanel">
+  const faucet = pair.hasFaucet;
+  const faucetPanel = faucet
+    ? `<div class="ipanel">
         <div class="step">1</div><div class="ilabel">Faucet</div>
         <p class="muted">Public mint of the mock ${escapeHtml(pair.underlyingSymbol)}.</p>
         <input id="faucet-amount" class="in" inputmode="decimal" placeholder="e.g. 1000" value="1000" />
         <button class="btn solid" id="faucet-btn">Mint ${escapeHtml(pair.underlyingSymbol)}</button>
         <div class="status" id="faucet-status"></div>
-      </div>
+      </div>`
+    : "";
+  view.innerHTML = `
+    <a class="back" href="?" id="back">← all transfers</a>
+    <h2 class="ph">Fund Confidential Balance</h2>
+    <p class="muted wide">${
+      faucet
+        ? `Mint the mock underlying, wrap it into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back (something only you can do).`
+        : `Wrap <b>${escapeHtml(pair.underlyingSymbol)}</b> you already hold into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back — something only you can do. The amount is encrypted on-chain.`
+    }</p>
+    <div class="${faucet ? "grid3" : "grid2"}">
+      ${faucetPanel}
       <div class="ipanel">
-        <div class="step">2</div><div class="ilabel">Wrap</div>
-        <p class="muted">Approve and wrap into confidential ${escapeHtml(pair.symbol)}.</p>
+        <div class="step">${faucet ? 2 : 1}</div><div class="ilabel">Wrap</div>
+        <p class="muted">Approve and wrap ${escapeHtml(pair.underlyingSymbol)} into confidential ${escapeHtml(pair.symbol)}.</p>
         <input id="wrap-amount" class="in" inputmode="decimal" placeholder="e.g. 250" value="250" />
         <button class="btn solid" id="wrap-btn">Approve &amp; wrap</button>
         <div class="status" id="wrap-status"></div>
       </div>
       <div class="ipanel">
-        <div class="step">3</div><div class="ilabel">Balance</div>
+        <div class="step">${faucet ? 3 : 2}</div><div class="ilabel">Balance</div>
         <p class="muted">Decrypt your ${escapeHtml(pair.symbol)} balance with an EIP-712 permit.</p>
         <button class="btn ghost" id="bal-btn">Decrypt my balance</button>
         <div class="bal" id="bal-out"></div>
@@ -748,7 +765,9 @@ async function renderFund(): Promise<void> {
     event.preventDefault();
     go("?");
   });
-  $("faucet-btn").addEventListener("click", () => void doFaucet(pair));
+  if (faucet) {
+    $("faucet-btn").addEventListener("click", () => void doFaucet(pair));
+  }
   $("wrap-btn").addEventListener("click", () => void doWrap(pair));
   $("bal-btn").addEventListener("click", () => void doDecryptBalance(pair));
 }
@@ -759,7 +778,7 @@ async function doFaucet(pair: TokenPair): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     const amount = toBaseUnits(
       ($("faucet-amount") as HTMLInputElement).value,
       pair.decimals,
@@ -784,7 +803,7 @@ async function doWrap(pair: TokenPair): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     const amount = toBaseUnits(
       ($("wrap-amount") as HTMLInputElement).value,
       pair.decimals,
@@ -805,7 +824,7 @@ async function doDecryptBalance(pair: TokenPair): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     status.textContent = "Sign to decrypt your balance…";
     const wrapped = await getWrapped(pair.confidentialToken);
     const balance = (await wrapped.balanceOf(
@@ -850,7 +869,7 @@ async function renderCompose(): Promise<void> {
         <label class="fl">Trigger asset
           <select id="c-asset" class="in">
             <option>ETH</option><option>BTC</option><option>SOL</option>
-            <option>LINK</option><option>XRP</option><option>USDT</option>
+            <option>USDT</option>
           </select></label>
         <label class="fl">When
           <select id="c-op" class="in"><option value="&gt;=">rises to ≥</option><option value="&lt;=">falls to ≤</option></select></label>
@@ -926,7 +945,7 @@ async function doSeal(pair: TokenPair): Promise<void> {
       ...(escrowId ? { escrowId } : {}),
     });
 
-    await ensureSepolia();
+    await ensureMainnet();
 
     // Atomic settlement: escrow the confidential amount into the hook now, so the
     // covenant's reveal can release it to the recipient in a single transaction.
@@ -1017,7 +1036,7 @@ async function doSettle(
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     const pair = await token();
     const decimals =
       instruction.token.toLowerCase() === pair.confidentialToken.toLowerCase()
@@ -1046,7 +1065,7 @@ async function keeperAction(action: KeeperAction, id: string): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     status.textContent = "Building the transaction…";
     const result = await postJson<KeeperTxResponse>("/api/keeper-tx", {
       action,
@@ -1175,18 +1194,18 @@ function paintConnect(): void {
   }
 }
 
-async function ensureSepolia(): Promise<void> {
+async function ensureMainnet(): Promise<void> {
   if (!wallet.provider) {
     return;
   }
   const chainId = await wallet.provider.request({ method: "eth_chainId" });
-  if (chainId === SEPOLIA_HEX) {
+  if (chainId === MAINNET_HEX) {
     return;
   }
   try {
     await wallet.provider.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: SEPOLIA_HEX }],
+      params: [{ chainId: MAINNET_HEX }],
     });
   } catch (error) {
     if ((error as { code?: number }).code === 4902) {
@@ -1194,14 +1213,14 @@ async function ensureSepolia(): Promise<void> {
         method: "wallet_addEthereumChain",
         params: [
           {
-            chainId: SEPOLIA_HEX,
-            chainName: "Sepolia",
+            chainId: MAINNET_HEX,
+            chainName: "Ethereum",
             nativeCurrency: {
-              name: "Sepolia Ether",
+              name: "Ether",
               symbol: "ETH",
               decimals: 18,
             },
-            rpcUrls: ["https://ethereum-sepolia-rpc.publicnode.com"],
+            rpcUrls: ["https://ethereum-rpc.publicnode.com"],
             blockExplorerUrls: [EXPLORER],
           },
         ],
@@ -1214,7 +1233,7 @@ async function ensureSepolia(): Promise<void> {
 
 /** Send one prebuilt transaction with the connected wallet, returning its hash. */
 async function sendTx(tx: Tx): Promise<string> {
-  await ensureSepolia();
+  await ensureMainnet();
   return (await wallet.provider?.request({
     method: "eth_sendTransaction",
     params: [
@@ -1328,7 +1347,7 @@ async function renderDeploy(): Promise<void> {
     <div class="errbox" style="margin:0 0 1.25rem">
       <b>Unaudited, untested reference contract.</b>
       <p class="muted">Deploying here is safe — a deployment succeeds whenever the contract compiles — but its
-      on-chain behaviour has not been validated. Deploy to <b>Sepolia</b>, exercise escrow → reveal → release
+      on-chain behaviour has not been validated. Deploy to <b>mainnet</b>, exercise escrow → reveal → release
       and the refund path on testnet, and review the source before any real use. Design and caveats:
       <span class="mono">contracts/README.md</span>.</p>
     </div>
@@ -1387,7 +1406,7 @@ async function doDeployHook(): Promise<void> {
     if (!ensureWallet()) {
       return;
     }
-    await ensureSepolia();
+    await ensureMainnet();
     const market = ($("dep-market") as HTMLInputElement).value.trim();
     if (!isAddress(market)) {
       status.textContent = "Enter a valid market address.";
@@ -1426,7 +1445,7 @@ async function doValidateHook(): Promise<void> {
     }
     status.textContent = "Checking…";
     const publicClient = createPublicClient({
-      chain: sepolia,
+      chain: mainnet,
       transport: http(),
     });
     const code = await publicClient.getCode({ address: addr as `0x${string}` });
