@@ -70,11 +70,24 @@ function chainNow(): number {
   return Math.floor(Date.now() / 1000) + clockOffset;
 }
 
+/** Turn a failed `/api` response into an Error, keeping the server's `detail`
+ *  (the underlying cause) rather than only its short `error` label. */
+function httpError(
+  payload: { error?: string; detail?: string },
+  fallback: string,
+): Error {
+  const base = payload.error ?? fallback;
+  return new Error(payload.detail ? `${base}: ${payload.detail}` : base);
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
-  const body = (await response.json()) as T & { error?: string };
+  const body = (await response.json()) as T & {
+    error?: string;
+    detail?: string;
+  };
   if (!response.ok) {
-    throw new Error(body.error ?? response.statusText);
+    throw httpError(body, response.statusText);
   }
   return body;
 }
@@ -85,9 +98,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = (await response.json()) as T & { error?: string };
+  const data = (await response.json()) as T & {
+    error?: string;
+    detail?: string;
+  };
   if (!response.ok) {
-    throw new Error(data.error ?? response.statusText);
+    throw httpError(data, response.statusText);
   }
   return data;
 }
@@ -782,7 +798,7 @@ async function renderFund(): Promise<void> {
     <p class="muted wide">${
       faucet
         ? `Mint the mock underlying, wrap it into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back (something only you can do).`
-        : `Wrap <b>${escapeHtml(pair.underlyingSymbol)}</b> you already hold into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back, something only you can do. The amount is encrypted on-chain.`
+        : `Wrap <b>${escapeHtml(pair.underlyingSymbol)}</b> you already hold into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back (something only you can do). The amount is encrypted on-chain.`
     }</p>
     ${tokenPicker()}
     <div class="${faucet ? "grid3" : "grid2"}">
