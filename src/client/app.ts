@@ -12,7 +12,7 @@
  * other conforming wallet all work.
  */
 
-import { ZamaSDK } from "@zama-fhe/sdk";
+import { isEncryptedValueZero, ZamaSDK } from "@zama-fhe/sdk";
 import { mainnet as mainnetFhe } from "@zama-fhe/sdk/chains";
 import { createConfig } from "@zama-fhe/sdk/viem";
 import { web } from "@zama-fhe/sdk/web";
@@ -840,42 +840,111 @@ async function doFaucet(pair: TokenPair): Promise<void> {
 }
 
 async function doWrap(pair: TokenPair): Promise<void> {
-  const status = $("wrap-status");
+  const host = $("wrap-status");
+  if (!ensureWallet()) {
+    return;
+  }
+  let amount: bigint;
   try {
-    if (!ensureWallet()) {
-      return;
-    }
-    await ensureMainnet();
-    const amount = toBaseUnits(
+    amount = toBaseUnits(
       ($("wrap-amount") as HTMLInputElement).value,
       pair.decimals,
     );
-    status.textContent = "Approving and wrapping…";
-    const wrapped = await getWrapped(pair.confidentialToken);
-    const result = await wrapped.shield(amount);
-    status.innerHTML = `Wrapped into ${escapeHtml(pair.symbol)}${hashOf(result)}`;
   } catch (error) {
-    status.textContent = message(error);
+    host.textContent = message(error);
+    return;
+  }
+  const ck = new Checklist(host, [
+    { id: "approve", label: `Approve ${pair.underlyingSymbol}` },
+    { id: "wrap", label: `Wrap into ${pair.symbol}` },
+  ]);
+  try {
+    await ensureMainnet();
+    ck.begin("approve", "confirm in your wallet…");
+    const wrapped = await getWrapped(pair.confidentialToken);
+    // shield auto-detects its path: a two-tx approve-then-wrap, or a single
+    // ERC-1363 transferAndCall with no approval. Reflect whichever actually runs.
+    let approvalSeen = false;
+    await wrapped.shield(amount, {
+      onApprovalSubmitted: (hash) => {
+        approvalSeen = true;
+        ck.begin("approve", `approval sent · ${txLink(hash)}, confirming…`);
+      },
+      onShieldSubmitted: (hash) => {
+        if (approvalSeen) {
+          ck.done("approve");
+        } else {
+          ck.skip("approve", "not required for this token");
+        }
+        ck.begin("wrap", `wrap sent · ${txLink(hash)}, confirming…`);
+      },
+    });
+    ck.done("wrap", `wrapped into ${escapeHtml(pair.symbol)}`);
+    ck.finish();
+  } catch (error) {
+    ck.fail(escapeHtml(message(error)));
   }
 }
 
 async function doDecryptBalance(pair: TokenPair): Promise<void> {
-  const status = $("bal-status");
+  const host = $("bal-status");
   const out = $("bal-out");
+  if (!ensureWallet()) {
+    return;
+  }
+  const ck = new Checklist(host, [
+    { id: "read", label: "Read your encrypted balance" },
+    { id: "authorize", label: "Authorize decryption in your wallet" },
+    { id: "fetch", label: "Fetch and decrypt via the relayer" },
+  ]);
   try {
-    if (!ensureWallet()) {
+    await ensureMainnet();
+    const token = pair.confidentialToken as `0x${string}`;
+    const account = wallet.account as `0x${string}`;
+
+    ck.begin("read");
+    const sdk = await getSdk();
+    const wrapped = await getWrapped(token);
+    const handle = await wrapped.confidentialBalanceOf(account);
+    // A zero handle is an unfunded balance; there is nothing to decrypt, so
+    // skip the signature and the relayer round-trip entirely.
+    if (isEncryptedValueZero(handle)) {
+      ck.done("read", "your balance is zero");
+      ck.skip("authorize", "not needed for a zero balance");
+      ck.skip("fetch", "not needed for a zero balance");
+      out.textContent = `0 ${pair.symbol}`;
       return;
     }
-    await ensureMainnet();
-    status.textContent = "Sign to decrypt your balance…";
-    const wrapped = await getWrapped(pair.confidentialToken);
-    const balance = (await wrapped.balanceOf(
-      wallet.account as `0x${string}`,
-    )) as bigint;
-    out.textContent = `${fromBaseUnits(balance, pair.decimals)} ${pair.symbol}`;
-    status.textContent = "Decrypted locally in your browser.";
+    ck.done("read");
+
+    // Sign the decryption permit (prompts the wallet the first time; instant
+    // afterwards, since the SDK caches it), then fetch and locally decrypt. The
+    // fetch step is where the relayer waits on the gateway, so it owns that wait
+    // rather than the signature step.
+    ck.begin(
+      "authorize",
+      "sign in your wallet (instant if already authorized)",
+    );
+    await sdk.permits.grantPermit([token]);
+    ck.done("authorize");
+
+    ck.begin(
+      "fetch",
+      "waiting for the network to attest and return your ciphertext…",
+    );
+    const clear = (
+      await sdk.decryption.decryptValues([
+        { encryptedValue: handle, contractAddress: token },
+      ])
+    )[handle];
+    if (clear === undefined) {
+      throw new Error("the relayer returned no value for this balance");
+    }
+    ck.done("fetch", "decrypted locally in your browser");
+    ck.finish();
+    out.textContent = `${fromBaseUnits(clear as bigint, pair.decimals)} ${pair.symbol}`;
   } catch (error) {
-    status.textContent = message(error);
+    ck.fail(escapeHtml(message(error)));
   }
 }
 
@@ -935,35 +1004,57 @@ async function renderCompose(): Promise<void> {
 }
 
 async function doSeal(pair: TokenPair): Promise<void> {
-  const status = $("seal-status");
-  try {
-    if (!ensureWallet()) {
-      return;
-    }
-    const recipient = ($("c-recipient") as HTMLInputElement).value.trim();
-    const amountHuman = ($("c-amount") as HTMLInputElement).value.trim();
-    const asset = ($("c-asset") as HTMLSelectElement).value;
-    const op = ($("c-op") as HTMLSelectElement).value;
-    const targetUsd = ($("c-target") as HTMLInputElement).value.trim();
-    const memo = ($("c-memo") as HTMLInputElement).value.trim();
-    const deadlineLocal = ($("c-deadline") as HTMLInputElement).value;
+  const host = $("seal-status");
+  if (!ensureWallet()) {
+    return;
+  }
+  const recipient = ($("c-recipient") as HTMLInputElement).value.trim();
+  const amountHuman = ($("c-amount") as HTMLInputElement).value.trim();
+  const asset = ($("c-asset") as HTMLSelectElement).value;
+  const op = ($("c-op") as HTMLSelectElement).value;
+  const targetUsd = ($("c-target") as HTMLInputElement).value.trim();
+  const memo = ($("c-memo") as HTMLInputElement).value.trim();
+  const deadlineLocal = ($("c-deadline") as HTMLInputElement).value;
+  const deadlineUnix = Math.floor(new Date(deadlineLocal).getTime() / 1000);
 
+  // Pure input validation up front, shown plainly before the checklist starts.
+  try {
     if (!/^0x[0-9a-fA-F]{40}$/.test(recipient)) {
       throw new Error("recipient must be a wallet address");
     }
     // Validate the amount now so a bad one is caught before sealing, even though
     // it is only sent at settlement.
     toBaseUnits(amountHuman, pair.decimals);
-    const deadlineUnix = Math.floor(new Date(deadlineLocal).getTime() / 1000);
     if (!Number.isFinite(deadlineUnix)) {
       throw new Error("pick a deadline");
     }
+  } catch (error) {
+    host.textContent = message(error);
+    return;
+  }
 
-    const cfg = await cachedConfig();
-    const atomic = cfg.atomic && cfg.hook !== null && isAddress(cfg.hook);
-    const escrowId = atomic ? randomId() : null;
+  const cfg = await cachedConfig();
+  const atomic = cfg.atomic && cfg.hook !== null && isAddress(cfg.hook);
+  const escrowId = atomic ? randomId() : null;
 
-    status.textContent = "Sealing the instruction and pricing the Covenant…";
+  const ck = new Checklist(
+    host,
+    atomic
+      ? [
+          { id: "seal", label: "Seal the instruction & price the Covenant" },
+          { id: "authorize", label: "Authorise the settlement hook" },
+          { id: "escrow", label: "Encrypt & escrow the amount" },
+          { id: "approve", label: "Approve the NIL protocol fee" },
+          { id: "post", label: "Post the Covenant" },
+        ]
+      : [
+          { id: "seal", label: "Seal the instruction & price the Covenant" },
+          { id: "approve", label: "Approve the NIL protocol fee" },
+          { id: "post", label: "Post the Covenant" },
+        ],
+  );
+  try {
+    ck.begin("seal", "sealing & pricing…");
     const built = await postJson<SealResponse>("/api/seal", {
       recipient,
       token: pair.confidentialToken,
@@ -976,6 +1067,7 @@ async function doSeal(pair: TokenPair): Promise<void> {
       author: wallet.account,
       ...(atomic ? { useHook: true, amountCommitment: escrowId } : {}),
     });
+    ck.done("seal");
 
     // Stash the amount (and, in atomic mode, the escrow id) locally. It never
     // leaves the browser; losing it only means re-entering the amount to settle,
@@ -996,8 +1088,7 @@ async function doSeal(pair: TokenPair): Promise<void> {
       const amountUnits = toBaseUnits(amountHuman, pair.decimals);
       const walletClient = makeWalletClient();
 
-      status.textContent =
-        "Authorising the settlement hook to move your balance…";
+      ck.begin("authorize", "confirm the operator approval in your wallet…");
       const until = Math.floor(Date.now() / 1000) + 86_400;
       const opHash = await walletClient.writeContract({
         address: pair.confidentialToken as `0x${string}`,
@@ -1005,10 +1096,11 @@ async function doSeal(pair: TokenPair): Promise<void> {
         functionName: "setOperator",
         args: [hook, until],
       });
+      ck.note("authorize", `operator tx sent · ${txLink(opHash)}, confirming…`);
       await waitForReceipt(opHash);
+      ck.done("authorize");
 
-      status.textContent =
-        "Encrypting the amount for the hook and escrowing it…";
+      ck.begin("escrow", "encrypting the amount in your browser…");
       const sdk = await getSdk();
       const enc = await sdk.encrypt({
         values: [{ value: amountUnits, type: "euint64" }],
@@ -1027,16 +1119,21 @@ async function doSeal(pair: TokenPair): Promise<void> {
           enc.inputProof,
         ],
       });
+      ck.note("escrow", `escrow tx sent · ${txLink(escrowHash)}, confirming…`);
       await waitForReceipt(escrowHash);
+      ck.done("escrow");
     }
 
     if (built.approve) {
-      status.textContent = "Approve NIL for the protocol fee…";
+      ck.begin("approve", "confirm the NIL approval in your wallet…");
       const approveHash = await sendTx(built.approve);
       // Wait for the approval to be mined so the post is estimated against the
       // updated allowance — otherwise the wallet rejects the post as failing.
-      status.textContent = "Waiting for the NIL approval to confirm…";
+      ck.note("approve", `approval sent · ${txLink(approveHash)}, confirming…`);
       await waitForReceipt(approveHash);
+      ck.done("approve");
+    } else {
+      ck.skip("approve", "no fee approval needed");
     }
     if (
       built.simulated &&
@@ -1048,20 +1145,25 @@ async function doSeal(pair: TokenPair): Promise<void> {
           `Posting the Covenant is expected to revert:\n\n${built.simulated}\n\nSend anyway?`,
         )
       ) {
-        status.textContent = "";
+        ck.skip("post", "cancelled");
         return;
       }
     }
-    status.textContent = "Post the Covenant to seal this transfer…";
+    ck.begin("post", "confirm the Covenant post in your wallet…");
     const hash = await sendTx(built.post);
-    status.innerHTML = `${txDone("Sealed", hash)}. ${
-      atomic
-        ? "The amount is escrowed and auto-settles when the covenant opens."
-        : "It will appear in the feed shortly."
-    }`;
+    ck.done("post", txLink(hash));
+    ck.finish();
+    host.insertAdjacentHTML(
+      "beforeend",
+      `<p class="ck-final">${
+        atomic
+          ? "The amount is escrowed and auto-settles when the covenant opens."
+          : "Sealed. It will appear in the feed shortly."
+      }</p>`,
+    );
     window.setTimeout(() => go("?"), 3500);
   } catch (error) {
-    status.textContent = message(error);
+    ck.fail(escapeHtml(message(error)));
   }
 }
 
@@ -1073,11 +1175,15 @@ async function doSettle(
   t: TransferDetail,
   instruction: { recipient: string; token: string; tokenSymbol: string | null },
 ): Promise<void> {
-  const status = $("settle-status");
+  const host = $("settle-status");
+  if (!ensureWallet()) {
+    return;
+  }
+  const ck = new Checklist(host, [
+    { id: "encrypt", label: "Encrypt the amount" },
+    { id: "send", label: "Send confidentially" },
+  ]);
   try {
-    if (!ensureWallet()) {
-      return;
-    }
     await ensureMainnet();
     const pair = await token();
     const decimals =
@@ -1088,46 +1194,67 @@ async function doSettle(
       ($("settle-amount") as HTMLInputElement).value,
       decimals,
     );
-    status.textContent = "Encrypting and sending confidentially…";
+    ck.begin("encrypt", "encrypting the amount in your browser…");
     const wrapped = await getWrapped(instruction.token);
     const result = await wrapped.confidentialTransfer(
       instruction.recipient as `0x${string}`,
       amount,
+      {
+        onEncryptComplete: () => {
+          ck.done("encrypt");
+          ck.begin("send", "confirm the transfer in your wallet…");
+        },
+        onTransferSubmitted: (hash) => {
+          ck.note("send", `sent · ${txLink(hash)}, confirming…`);
+        },
+      },
     );
-    status.innerHTML = `Sent confidentially${hashOf(result)}. The amount stays encrypted on-chain.`;
+    ck.done("send", txLink(result.txHash));
+    ck.finish();
+    host.insertAdjacentHTML(
+      "beforeend",
+      `<p class="ck-final">The amount stays encrypted on-chain.</p>`,
+    );
     window.setTimeout(() => void loadTransfer(t.id, { silent: true }), 4000);
   } catch (error) {
-    status.textContent = message(error);
+    ck.fail(escapeHtml(message(error)));
   }
 }
 
 async function keeperAction(action: KeeperAction, id: string): Promise<void> {
-  const status = $("keeper-status");
+  const host = $("keeper-status");
+  if (!ensureWallet()) {
+    return;
+  }
+  const ck = new Checklist(host, [
+    { id: "build", label: `Build the ${action} transaction` },
+    { id: "send", label: "Send & confirm" },
+  ]);
   try {
-    if (!ensureWallet()) {
-      return;
-    }
     await ensureMainnet();
-    status.textContent = "Building the transaction…";
+    ck.begin("build", "preparing the calldata…");
     const result = await postJson<KeeperTxResponse>("/api/keeper-tx", {
       action,
       id,
     });
+    ck.done("build");
     if (result.simulated && result.simulated !== "ok") {
       if (
         !confirm(
           `This transaction is expected to revert:\n\n${result.simulated}\n\nSend anyway?`,
         )
       ) {
-        status.textContent = "";
+        ck.skip("send", "cancelled");
         return;
       }
     }
+    ck.begin("send", "confirm in your wallet…");
     const hash = await sendTx(result.tx);
-    status.innerHTML = `${txDone(action, hash)}`;
+    ck.done("send", txLink(hash));
+    ck.finish();
     window.setTimeout(() => void loadTransfer(id, { silent: true }), 4000);
   } catch (error) {
-    status.textContent = message(error);
+    ck.fail(escapeHtml(message(error)));
   }
 }
 
@@ -1325,19 +1452,6 @@ function txDone(label: string, hash: string): string {
   return `${escapeHtml(label)} · <a class="mono" href="${EXPLORER}/tx/${hash}" target="_blank" rel="noreferrer">${truncateAddress(hash)}</a>`;
 }
 
-/** Render a tx-hash link from an SDK return value, tolerating a hash string, a
- *  `{ hash }`/`{ transactionHash }` object, or nothing. */
-function hashOf(result: unknown): string {
-  const record = result as { hash?: string; transactionHash?: string } | null;
-  const hash =
-    typeof result === "string"
-      ? result
-      : (record?.hash ?? record?.transactionHash);
-  return hash
-    ? ` · <a class="mono" href="${EXPLORER}/tx/${hash}" target="_blank" rel="noreferrer">${truncateAddress(hash)}</a>`
-    : "";
-}
-
 function message(error: unknown): string {
   return (
     (error as { shortMessage?: string }).shortMessage ??
@@ -1349,6 +1463,132 @@ function message(error: unknown): string {
 function errorHtml(title: string, error: unknown): string {
   return `<div class="errbox"><b>${escapeHtml(title)}</b><p class="mono tiny">${escapeHtml(message(error))}</p>
     <p class="muted">If this is a fresh deployment, the on-chain reads may not be reachable yet.</p></div>`;
+}
+
+/** A short, explorer-linked tx hash for a checklist note. */
+function txLink(hash: string): string {
+  return `<a class="mono ck-link" href="${EXPLORER}/tx/${hash}" target="_blank" rel="noreferrer">${truncateAddress(hash)}</a>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Step checklist (live status for multi-step wallet flows)           */
+/* ------------------------------------------------------------------ */
+
+type StepState = "pending" | "active" | "done" | "error" | "skipped";
+
+/**
+ * A live, step-by-step status list for a multi-step flow. Each `begin`, `done`,
+ * `skip`, `note`, `fail`, or `finish` call re-renders the host element, so the
+ * person sees exactly which stage is running rather than one status line that
+ * sits on the wrong message while the SDK waits on the network. Notes are
+ * treated as trusted HTML (for `txLink`), so any error text is escaped by the
+ * caller before it reaches `fail`.
+ */
+class Checklist {
+  private readonly host: HTMLElement;
+  private readonly steps: {
+    id: string;
+    label: string;
+    state: StepState;
+    note: string;
+  }[];
+
+  constructor(host: HTMLElement, steps: { id: string; label: string }[]) {
+    this.host = host;
+    this.steps = steps.map((s) => ({
+      id: s.id,
+      label: s.label,
+      state: "pending",
+      note: "",
+    }));
+    this.render();
+  }
+
+  private at(id: string) {
+    const found = this.steps.find((s) => s.id === id);
+    if (!found) {
+      throw new Error(`unknown checklist step ${id}`);
+    }
+    return found;
+  }
+
+  /** Mark a step active, closing any still-active earlier step. */
+  begin(id: string, note = ""): this {
+    for (const s of this.steps) {
+      if (s.state === "active") {
+        s.state = "done";
+      }
+    }
+    const step = this.at(id);
+    step.state = "active";
+    step.note = note;
+    return this.render();
+  }
+
+  done(id: string, note = ""): this {
+    const step = this.at(id);
+    step.state = "done";
+    if (note) {
+      step.note = note;
+    }
+    return this.render();
+  }
+
+  skip(id: string, note = "not required"): this {
+    const step = this.at(id);
+    step.state = "skipped";
+    step.note = note;
+    return this.render();
+  }
+
+  note(id: string, note: string): this {
+    this.at(id).note = note;
+    return this.render();
+  }
+
+  /** Mark the running step (or the first unfinished one) failed. `note` must be
+   *  HTML-safe already. */
+  fail(note: string): this {
+    const step =
+      this.steps.find((s) => s.state === "active") ??
+      this.steps.find((s) => s.state === "pending");
+    if (step) {
+      step.state = "error";
+      step.note = note;
+    }
+    return this.render();
+  }
+
+  /** Close every remaining step as done (final success). */
+  finish(): this {
+    for (const s of this.steps) {
+      if (s.state === "active" || s.state === "pending") {
+        s.state = "done";
+      }
+    }
+    return this.render();
+  }
+
+  private render(): this {
+    const glyph: Record<StepState, string> = {
+      pending: "○",
+      active: `<span class="ck-spin"></span>`,
+      done: "✓",
+      error: "✕",
+      skipped: "–",
+    };
+    this.host.innerHTML = `<ul class="checklist">${this.steps
+      .map(
+        (s) => `<li class="ck-item ck-${s.state}">
+          <span class="ck-ico" aria-hidden="true">${glyph[s.state]}</span>
+          <span class="ck-body"><span class="ck-label">${escapeHtml(s.label)}</span>${
+            s.note ? `<span class="ck-note">${s.note}</span>` : ""
+          }</span>
+        </li>`,
+      )
+      .join("")}</ul>`;
+    return this;
+  }
 }
 
 function updateStamp(): void {

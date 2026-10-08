@@ -3,10 +3,10 @@
  *
  * Builds the calldata for one of the two permissionless keeper actions on a
  * sealed transfer's covenant and returns a ready transaction the browser signs.
- * Neither needs the author's key — only a wallet with Sepolia gas:
+ * Neither needs the author's key — only a wallet with mainnet gas (ETH):
  *
- *   reveal → post_result(id, plaintext, slots, shares)  once k good shares exist
- *   settle → settle_expired(id)                          close out an expired one
+ *   reveal → postResult(id, plaintext, slots, shares)   once k good shares exist
+ *   settle → settleExpired(id)                          close out an expired one
  *
  * A sealed transfer opens when its covenant resolves; the committee normally
  * posts the result once the trigger fires, but `reveal` lets anyone reconstruct

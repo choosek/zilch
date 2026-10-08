@@ -703,6 +703,100 @@ select.in {
   word-break: break-word;
 }
 
+/* Step checklist: live status for multi-step wallet flows. */
+.checklist {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+.ck-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 5px 0;
+  color: var(--muted);
+}
+.ck-ico {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--line);
+}
+.ck-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ck-label {
+  line-height: 1.3;
+}
+.ck-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+  opacity: 0.85;
+  word-break: break-word;
+}
+.ck-link {
+  color: var(--blue-ink);
+}
+.ck-pending {
+  opacity: 0.5;
+}
+.ck-active {
+  color: var(--ink);
+}
+.ck-done .ck-label,
+.ck-done {
+  color: var(--ink);
+}
+.ck-done .ck-ico {
+  color: var(--ok);
+}
+.ck-error {
+  color: #ff8a8a;
+}
+.ck-error .ck-ico {
+  color: #ff5a5a;
+}
+.ck-skipped {
+  opacity: 0.45;
+}
+.ck-skipped .ck-label {
+  text-decoration: line-through;
+}
+.ck-final {
+  margin: 10px 0 0;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ok);
+}
+.ck-spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--blue-ink);
+  border-radius: 50%;
+  animation: ck-rot 0.7s linear infinite;
+}
+@keyframes ck-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ck-spin {
+    animation-duration: 2s;
+  }
+}
+
 .step {
   font-family: var(--mono);
   font-weight: 700;
