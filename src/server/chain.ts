@@ -69,7 +69,11 @@ export function client(): PublicClient<Transport, Chain> {
   if (!cachedClient) {
     cachedClient = createPublicClient({
       chain: mainnet,
-      transport: http(RPC_URL, { batch: true }),
+      // No JSON-RPC batching: seal fires many reads at once, and a batched
+      // provider that drops or misaligns one sub-response makes an otherwise
+      // valid call (even protocolFee() on C0) return "0x". Standalone calls —
+      // what a direct `cast call` does — read consistently.
+      transport: http(RPC_URL),
     });
   }
   return cachedClient;
