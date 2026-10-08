@@ -33,8 +33,9 @@ export default async function handler(
 ): Promise<void> {
   const param = (req.query.path ?? []) as string | string[];
   const path = (Array.isArray(param) ? param : [param]).join("/");
-  const query =
-    req.url && req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+  const query = req.url?.includes("?")
+    ? req.url.slice(req.url.indexOf("?"))
+    : "";
   const target = `${RELAYER}/${path}${query}`;
 
   const headers: Record<string, string> = {};

@@ -133,6 +133,7 @@ a:hover {
   font-weight: 800;
   font-size: 0.85rem;
   letter-spacing: 0.02em;
+  white-space: nowrap;
   padding: 11px 18px;
   border: 2px solid var(--line-2);
   background: transparent;
@@ -237,7 +238,6 @@ a:hover {
 }
 .hero p {
   color: var(--muted);
-  max-width: 46ch;
   margin: 0;
   font-size: 1.02rem;
 }
@@ -634,10 +634,17 @@ a:hover {
   margin: 0 0 10px;
 }
 .wide {
-  max-width: 62ch;
+  max-width: none;
 }
 .wide b {
   color: var(--ink);
+}
+
+.tokpick {
+  margin: 4px 0 18px;
+}
+.form .tokpick {
+  margin: 0;
 }
 
 .form {
@@ -712,6 +719,10 @@ select.in {
 .grid3 .in,
 .grid3 .btn {
   margin-top: 10px;
+}
+.grid2 .btn,
+.grid3 .btn {
+  width: 100%;
 }
 .bal {
   font-size: 1.6rem;

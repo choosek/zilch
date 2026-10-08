@@ -272,19 +272,59 @@ async function getWrapped(tokenAddr: string): Promise<Wrapped> {
 /* Tokens                                                             */
 /* ------------------------------------------------------------------ */
 
-let tokenCache: TokenPair | null = null;
+let allTokens: TokenPair[] = [];
+let selectedToken: TokenPair | null = null;
 
-async function token(): Promise<TokenPair> {
-  if (tokenCache) {
-    return tokenCache;
+/** Load the confidential-token list from the registry once, caching it. The
+ *  first discovered token becomes the default selection. */
+async function loadTokens(): Promise<void> {
+  if (allTokens.length) {
+    return;
   }
   const data = await getJson<TokensResponse>("/api/tokens");
-  const first = data.tokens[0];
-  if (!first) {
+  if (!data.tokens.length) {
     throw new Error("no confidential token configured");
   }
-  tokenCache = first;
-  return first;
+  allTokens = data.tokens;
+  if (!selectedToken) {
+    selectedToken = allTokens[0];
+  }
+}
+
+/** The confidential token the funding and compose views currently act on. */
+async function token(): Promise<TokenPair> {
+  await loadTokens();
+  return selectedToken as TokenPair;
+}
+
+/** The token selector, shared by the funding and compose views. Lists every
+ *  confidential token the registry returned, with its underlying. */
+function tokenPicker(): string {
+  const options = allTokens
+    .map(
+      (t, i) =>
+        `<option value="${i}"${t.confidentialToken === selectedToken?.confidentialToken ? " selected" : ""}>${escapeHtml(t.symbol)} (wraps ${escapeHtml(t.underlyingSymbol)})</option>`,
+    )
+    .join("");
+  return `<label class="fl tokpick">Confidential token
+        <select id="tok-select" class="in">${options}</select></label>`;
+}
+
+/** Wire the token selector so a change updates the selection and re-renders. */
+function wireTokenPicker(rerender: () => void): void {
+  const select = document.getElementById(
+    "tok-select",
+  ) as HTMLSelectElement | null;
+  if (!select) {
+    return;
+  }
+  select.addEventListener("change", () => {
+    const next = allTokens[Number(select.value)];
+    if (next) {
+      selectedToken = next;
+      rerender();
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -331,11 +371,11 @@ function fuse(t: {
     const at = t.resolvedAt ?? posted;
     const pct = clampPct(((at - posted) / span) * 100);
     return `<div class="fuse open"><div class="burn" style="width:${pct}%"></div><i class="spark" style="left:${pct}%"></i></div>
-      <div class="fuseline open">opened ${relativeTime(at, now)} — trigger fired</div>`;
+      <div class="fuseline open">opened ${relativeTime(at, now)}, trigger fired</div>`;
   }
   if (t.outcome === "expired") {
     return `<div class="fuse expired"><div class="burn" style="width:100%"></div></div>
-      <div class="fuseline expired">deadline passed — settled to nothing</div>`;
+      <div class="fuseline expired">deadline passed, settled to nothing</div>`;
   }
   const pct = clampPct(((now - posted) / span) * 100);
   return `<div class="fuse sealed"><div class="burn" style="width:${pct}%"></div><i class="spark" style="left:${pct}%"></i></div>
@@ -345,7 +385,7 @@ function fuse(t: {
 /** The redaction strip shown for a still-sealed instruction. */
 function redaction(): string {
   return `<div class="redact"><span class="bar"></span><span class="bar b2"></span><span class="bar b3"></span>
-    <span class="rlabel">sealed — opens at the trigger</span></div>`;
+    <span class="rlabel">sealed, opens at the trigger</span></div>`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -380,7 +420,7 @@ function feedHtml(data: FeedResponse): string {
   return `
     <section class="hero">
       <div class="hero-copy">
-        <h1><span class="hl-cov">Sealed</span> <span class="hl">Confidential</span> Transfers</h1>
+        <h1><span class="hl">Confidential</span> <span class="hl-cov">Sealed</span> Transfers</h1>
         <p>Payments whose <b>amounts are invisible</b> and whose <b>instructions are sealed
         envelopes</b> that open only when the market or the clock dictates to do so.</p>
       </div>
@@ -448,7 +488,7 @@ function transferHtml(t: TransferDetail, atomic: boolean): string {
       ? instructionPanel(t.instruction)
       : t.outcome === "expired"
         ? `<div class="ipanel expired"><div class="ilabel">Instruction</div>
-           <p class="muted">This transfer expired before its trigger fired. It settled to nothing — the instruction stays sealed for good.</p></div>`
+           <p class="muted">This transfer expired before its trigger fired. It settled to nothing. The instruction stays sealed for good.</p></div>`
         : `<div class="ipanel sealed"><div class="ilabel">Instruction</div>${redaction()}</div>`;
 
   const escrowId =
@@ -508,10 +548,10 @@ function instructionPanel(instruction: {
   memo: string | null;
 }): string {
   return `<section class="ipanel open">
-    <div class="ilabel">Instruction — <span class="opened">opened</span></div>
+    <div class="ilabel">Instruction: <span class="opened">opened</span></div>
     <div class="kv"><span class="k">Pay</span><span class="v">${addrLink(instruction.recipient)}</span></div>
     <div class="kv"><span class="k">Token</span><span class="v">${addrLink(instruction.token)}${instruction.tokenSymbol ? ` <span class="mono">${escapeHtml(instruction.tokenSymbol)}</span>` : ""}</span></div>
-    <div class="kv"><span class="k">Amount</span><span class="v muted">encrypted — set at settlement, never public</span></div>
+    <div class="kv"><span class="k">Amount</span><span class="v muted">encrypted, set at settlement, never public</span></div>
     ${instruction.memo ? `<div class="kv"><span class="k">Memo</span><span class="v">${escapeHtml(instruction.memo)}</span></div>` : ""}
   </section>`;
 }
@@ -521,7 +561,7 @@ function settlePanel(t: TransferDetail): string {
   const prefill = stash ? escapeHtml(stash.amount) : "";
   const sym = t.instruction?.tokenSymbol ?? "tokens";
   return `<section class="settle">
-    <div class="ilabel">Settle — send the confidential amount</div>
+    <div class="ilabel">Settle: send the confidential amount</div>
     <p class="muted">The trigger fired and the instruction opened. Send the confidential
     transfer now: the amount is encrypted in your browser and stays concealed on-chain.</p>
     <div class="settle-row">
@@ -539,7 +579,7 @@ function atomicPanel(escrowId: string, outcome: string): string {
   return `<section class="settle" id="atomic-panel" data-escrow="${escapeHtml(escrowId)}" data-outcome="${escapeHtml(outcome)}">
     <div class="ilabel">Atomic settlement</div>
     <p class="muted">This transfer's amount is escrowed in the settlement hook and is released to the
-    recipient inside the covenant's reveal transaction — there is no manual settlement step.</p>
+    recipient inside the covenant's reveal transaction; there is no manual settlement step.</p>
     <div class="status" id="atomic-status">Checking escrow…</div>
     <div id="atomic-actions"></div>
   </section>`;
@@ -578,10 +618,10 @@ async function hydrateEscrow(escrowId: string, outcome: string): Promise<void> {
     // 0 none · 1 escrowed · 2 released · 3 refunded
     if (state === 2) {
       statusEl.innerHTML =
-        "✓ Settled atomically on reveal — the confidential amount was released to the recipient.";
+        "✓ Settled atomically on reveal. The confidential amount was released to the recipient.";
     } else if (state === 3) {
       statusEl.textContent =
-        "Refunded — the escrowed amount was returned to the sender.";
+        "Refunded. The escrowed amount was returned to the sender.";
     } else if (state === 1) {
       statusEl.textContent =
         outcome === "open"
@@ -597,7 +637,7 @@ async function hydrateEscrow(escrowId: string, outcome: string): Promise<void> {
         );
     } else {
       statusEl.textContent =
-        "No escrow found for this transfer — the escrow step may not have completed at seal time.";
+        "No escrow found for this transfer; the escrow step may not have completed at seal time.";
     }
   } catch (error) {
     statusEl.textContent = message(error);
@@ -666,11 +706,11 @@ function keeperHtml(t: TransferDetail): string {
   const label =
     t.outcome === "expired"
       ? "Settle the expired Covenant"
-      : "Reveal — reconstruct and open now";
+      : "Reveal: reconstruct and open now";
   const help =
     t.outcome === "expired"
       ? "Close out the expired transfer and release the Covenant escrow."
-      : "If enough shares are posted, anyone can reconstruct the instruction and open it — earning the reconstructor fee.";
+      : "If enough shares are posted, anyone can reconstruct the instruction and open it, earning the reconstructor fee.";
   return `<section class="keeper">
     <div class="ilabel">Keeper</div>
     <p class="muted">${help}</p>
@@ -742,8 +782,9 @@ async function renderFund(): Promise<void> {
     <p class="muted wide">${
       faucet
         ? `Mint the mock underlying, wrap it into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back (something only you can do).`
-        : `Wrap <b>${escapeHtml(pair.underlyingSymbol)}</b> you already hold into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back — something only you can do. The amount is encrypted on-chain.`
+        : `Wrap <b>${escapeHtml(pair.underlyingSymbol)}</b> you already hold into a confidential <b>${escapeHtml(pair.symbol)}</b> balance, then read your balance back, something only you can do. The amount is encrypted on-chain.`
     }</p>
+    ${tokenPicker()}
     <div class="${faucet ? "grid3" : "grid2"}">
       ${faucetPanel}
       <div class="ipanel">
@@ -765,6 +806,7 @@ async function renderFund(): Promise<void> {
     event.preventDefault();
     go("?");
   });
+  wireTokenPicker(() => void renderFund());
   if (faucet) {
     $("faucet-btn").addEventListener("click", () => void doFaucet(pair));
   }
@@ -857,13 +899,12 @@ async function renderCompose(): Promise<void> {
   view.innerHTML = `
     <a class="back" href="?" id="back">← all transfers</a>
     <h2 class="ph">Seal &amp; Configure Confidential Transfer</h2>
-    <p class="muted wide">The instruction — who is paid, in which token, and a memo — is sealed into a
-    Covenant with a price or time trigger. The <b>amount</b> stays out of the Covenant entirely; you send it
-    confidentially with ${escapeHtml(pair.symbol)} when the transfer opens.</p>
+    <p class="muted wide">The instruction (who is paid, in which token, and a memo) is sealed into a Covenant with a price or time trigger. The <b>amount</b> stays out of the Covenant entirely; you send it confidentially with ${escapeHtml(pair.symbol)} when the transfer opens.</p>
     <div class="form">
+      ${tokenPicker()}
       <label class="fl">Recipient
         <input id="c-recipient" class="in" placeholder="0x…" /></label>
-      <label class="fl">Amount (${escapeHtml(pair.symbol)}) — kept in your browser
+      <label class="fl">Amount (${escapeHtml(pair.symbol)}), kept in your browser
         <input id="c-amount" class="in" inputmode="decimal" placeholder="e.g. 100" /></label>
       <div class="frow">
         <label class="fl">Trigger asset
@@ -889,6 +930,7 @@ async function renderCompose(): Promise<void> {
     event.preventDefault();
     go("?");
   });
+  wireTokenPicker(() => void renderCompose());
   $("seal-btn").addEventListener("click", () => void doSeal(pair));
 }
 
@@ -1012,10 +1054,10 @@ async function doSeal(pair: TokenPair): Promise<void> {
     }
     status.textContent = "Post the Covenant to seal this transfer…";
     const hash = await sendTx(built.post);
-    status.innerHTML = `${txDone("Sealed", hash)} — ${
+    status.innerHTML = `${txDone("Sealed", hash)}. ${
       atomic
-        ? "the amount is escrowed and auto-settles when the covenant opens."
-        : "it will appear in the feed shortly."
+        ? "The amount is escrowed and auto-settles when the covenant opens."
+        : "It will appear in the feed shortly."
     }`;
     window.setTimeout(() => go("?"), 3500);
   } catch (error) {
@@ -1052,7 +1094,7 @@ async function doSettle(
       instruction.recipient as `0x${string}`,
       amount,
     );
-    status.innerHTML = `Sent confidentially${hashOf(result)} — the amount stays encrypted on-chain.`;
+    status.innerHTML = `Sent confidentially${hashOf(result)}. The amount stays encrypted on-chain.`;
     window.setTimeout(() => void loadTransfer(t.id, { silent: true }), 4000);
   } catch (error) {
     status.textContent = message(error);
@@ -1128,7 +1170,7 @@ function openWalletModal(): void {
   } else if (window.ethereum) {
     list.innerHTML = `<div class="wopt" data-injected="1"><span class="wn">Injected wallet</span></div>`;
   } else {
-    list.innerHTML = `<div class="wnone">No wallet detected. Install MetaMask or Rainbow, then reload. Browsing the feed needs no wallet — only funding, sealing, settling, and keeper actions do.</div>`;
+    list.innerHTML = `<div class="wnone">No wallet detected. Install MetaMask or Rainbow, then reload. Browsing the feed needs no wallet; only funding, sealing, settling, and keeper actions do.</div>`;
   }
   for (const option of list.querySelectorAll<HTMLElement>(".wopt[data-uuid]")) {
     option.addEventListener("click", () => {
@@ -1339,23 +1381,15 @@ async function renderDeploy(): Promise<void> {
   view.innerHTML = `
     <a class="back" href="?" id="back">← all transfers</a>
     <h2 class="ph">Deploy the Settlement Hook</h2>
-    <p class="muted wide">This optional contract makes settlement <b>atomic</b>. The confidential amount is
-    escrowed when a transfer is sealed and released to the sealed recipient <i>inside the Covenant's reveal
-    transaction</i> — so the payment happens if and only if the Covenant opens, for the escrowed (still
-    encrypted) amount, to the sealed recipient. Without it, revealing only surfaces the instruction and the
-    transfer is a separate manual step bound to the reveal by nothing but app logic.</p>
+    <p class="muted wide">This optional contract makes settlement <b>atomic</b>. The confidential amount is escrowed when a transfer is sealed and released to the sealed recipient <i>inside the Covenant's reveal transaction</i>, so the payment happens if and only if the Covenant opens, for the escrowed (still encrypted) amount, to the sealed recipient. Without it, revealing only surfaces the instruction and the transfer is a separate manual step bound to the reveal by nothing but app logic.</p>
     <div class="errbox" style="margin:0 0 1.25rem">
       <b>Unaudited, untested reference contract.</b>
-      <p class="muted">Deploying here is safe — a deployment succeeds whenever the contract compiles — but its
-      on-chain behaviour has not been validated. Deploy to <b>mainnet</b>, exercise escrow → reveal → release
-      and the refund path on testnet, and review the source before any real use. Design and caveats:
-      <span class="mono">contracts/README.md</span>.</p>
+      <p class="muted">Deploying here is safe (a deployment succeeds whenever the contract compiles), but its on-chain behaviour has not been validated. This targets <b>mainnet</b>; exercise the escrow, reveal, release, and refund paths on a testnet first, and review the source before any real use. Design and caveats: <span class="mono">contracts/README.md</span>.</p>
     </div>
     <div class="grid3">
       <div class="ipanel">
         <div class="step">1</div><div class="ilabel">Deploy</div>
-        <p class="muted">Deploy <span class="mono">ZilchSettlementHook</span> with the Blacklight market as its
-        constructor argument.</p>
+        <p class="muted">Deploy <span class="mono">ZilchSettlementHook</span> with the Blacklight market as its constructor argument.</p>
         <label class="tiny muted">TriggerMarket (constructor arg)</label>
         <input id="dep-market" class="in mono" placeholder="0x…" value="${escapeHtml(market)}" />
         <button class="btn solid" id="dep-btn">Deploy settlement hook</button>
@@ -1387,10 +1421,7 @@ async function renderDeploy(): Promise<void> {
         <div class="status" id="cfg-gen"></div>
       </div>
     </div>
-    <p class="muted wide tiny">Chain id <span class="mono">${cfg?.chainId ?? "?"}</span>. Atomic settlement is
-    currently <b>${cfg?.atomic ? "enabled" : "disabled"}</b>. After configuring the hook, wiring the client-side
-    escrow and auto-settle flow is the final step (see the README); enable it once the deployed contract is
-    validated on-chain.</p>`;
+    <p class="muted wide tiny">Chain id <span class="mono">${cfg?.chainId ?? "?"}</span>. Atomic settlement is currently <b>${cfg?.atomic ? "enabled" : "disabled"}</b>. After configuring the hook, wiring the client-side escrow and auto-settle flow is the final step (see the README); enable it once the deployed contract is validated on-chain.</p>`;
   $("back").addEventListener("click", (event) => {
     event.preventDefault();
     go("?");
@@ -1419,7 +1450,7 @@ async function doDeployHook(): Promise<void> {
       bytecode: HOOK_BYTECODE,
       args: [market as `0x${string}`],
     });
-    status.innerHTML = `${txDone("Deployment sent", hash)} — waiting for the receipt…`;
+    status.innerHTML = `${txDone("Deployment sent", hash)}. Waiting for the receipt…`;
     const receipt = await waitForReceipt(hash);
     const addr = receipt.contractAddress;
     if (!addr) {
