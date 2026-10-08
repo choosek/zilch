@@ -20,6 +20,12 @@ import { nodePolyfills } from "vite-plugin-node-polyfills";
 
 export default defineConfig({
   plugins: [nodePolyfills()],
+  // The client is served from `/build/` (index.html loads `/build/app.js`), so
+  // the base must match. Chunk imports are relative and work either way, but the
+  // Zama SDK's Web Worker is referenced by an absolute URL that Vite prefixes
+  // with `base`; without this it resolves to `/assets/encrypt.worker-*.js` (404)
+  // instead of `/build/assets/encrypt.worker-*.js`.
+  base: "/build/",
   // The client's static assets (index.html, css, favicon) are authored directly
   // in public/; Vite must not try to copy public/ into its own output.
   publicDir: false,
