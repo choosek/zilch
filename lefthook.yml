@@ -1,30 +1,36 @@
 # Pin how the generated git hooks invoke lefthook. Without this, the hook
 # scripts in .git/hooks walk a package-manager probe ladder (yarn, pnpm, bun, …)
 # and, when the local binary is not found first, fall through to `pnpm lefthook`,
-# which drops a stray pnpm-lock.yaml into this npm project. Forcing `npx lefthook`
-# resolves the local node_modules/.bin/lefthook and never touches pnpm.
+# which drops a stray pnpm-lock.yaml into this npm project. `npx lefthook`
+# resolves the local node_modules/.bin/lefthook (run `npm install` first) and
+# never touches pnpm.
 lefthook: npx lefthook
 
+# Commands reference each tool by its FULL package name (`@biomejs/biome`, not
+# `biome`; `-p typescript tsc`, not `tsc`). The bare names collide with
+# unrelated squatted packages on npm, so a hook run before `npm install` would
+# silently fetch and run the wrong tool and "pass". With node_modules present,
+# npx resolves the local, pinned binary either way.
 pre-commit:
   commands:
     biome-format:
       glob: "*.{ts,json,jsonc}"
-      run: npx biome format --write --no-errors-on-unmatched --files-ignore-unknown=true --colors=off {staged_files}
+      run: npx @biomejs/biome format --write --no-errors-on-unmatched --files-ignore-unknown=true --colors=off {staged_files}
       stage_fixed: true
 
 commit-msg:
   commands:
     lint-commit-msg:
-      run: npx commitlint --edit
+      run: npx @commitlint/cli --edit
 
 pre-push:
   commands:
     biome-check:
       glob: "*.{ts,json,jsonc}"
-      run: npx biome check --no-errors-on-unmatched --files-ignore-unknown=true --colors=off {push_files}
+      run: npx @biomejs/biome check --no-errors-on-unmatched --files-ignore-unknown=true --colors=off {push_files}
     tsc-check:
       glob: "*.{ts}"
-      run: npx tsc
+      run: npx -p typescript tsc
     test:
       glob: "*.{ts}"
       run: npm test
