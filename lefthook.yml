@@ -1,3 +1,10 @@
+# Pin how the generated git hooks invoke lefthook. Without this, the hook
+# scripts in .git/hooks walk a package-manager probe ladder (yarn, pnpm, bun, …)
+# and, when the local binary is not found first, fall through to `pnpm lefthook`,
+# which drops a stray pnpm-lock.yaml into this npm project. Forcing `npx lefthook`
+# resolves the local node_modules/.bin/lefthook and never touches pnpm.
+lefthook: npx lefthook
+
 pre-commit:
   commands:
     biome-format:

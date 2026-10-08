@@ -130,6 +130,11 @@ dist
 
 # pnpm
 .pnpm-store
+# This is an npm project (package-lock.json is the lockfile). Ignore stray
+# lockfiles from other package managers so a hook or a mistaken `pnpm`/`yarn`
+# invocation can never commit one.
+pnpm-lock.yaml
+yarn.lock
 
 # yarn v3
 .pnp.*
