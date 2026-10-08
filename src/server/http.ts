@@ -32,7 +32,10 @@ export function fail(
 ): void {
   const body: ErrorResponse = { error };
   if (detail !== undefined) {
-    body.detail = String(detail).slice(0, 300);
+    // Keep the whole underlying message within reason: a viem contract-call
+    // error (address, function, args, version) runs well past a few hundred
+    // chars, and cutting it hid exactly the part that pinpoints the fault.
+    body.detail = String(detail).slice(0, 2000);
   }
   send(res, body, status);
 }
