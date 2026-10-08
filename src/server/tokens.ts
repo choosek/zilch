@@ -80,39 +80,57 @@ interface RegistryPair {
   isValid: boolean;
 }
 
-/** Read a confidential token's symbol + decimals and its underlying's symbol,
- *  tolerating a token that omits a metadata view. */
+/** Read a confidential token's symbol + decimals and its underlying's symbol +
+ *  decimals, tolerating a token that omits a metadata view. The two decimals can
+ *  differ: the ERC-7984 wrapper fits balances in an euint64, so a confidential
+ *  token is usually fewer decimals than its underlying (cWETH 6 vs WETH 18). Wrap
+ *  and faucet amounts are in underlying units; balances and transfers in
+ *  confidential units. */
 async function describe(pair: RegistryPair): Promise<TokenPair> {
   const pub = client();
-  const [confidentialSymbol, decimals, underlyingSymbol] = await Promise.all([
-    pub
-      .readContract({
-        address: pair.confidentialTokenAddress,
-        abi: metaAbi,
-        functionName: "symbol",
-      })
-      .catch(() => "cTOKEN"),
-    pub
-      .readContract({
-        address: pair.confidentialTokenAddress,
-        abi: metaAbi,
-        functionName: "decimals",
-      })
-      .catch(() => 6),
-    pub
-      .readContract({
-        address: pair.tokenAddress,
-        abi: metaAbi,
-        functionName: "symbol",
-      })
-      .catch(() => "TOKEN"),
-  ]);
+  const [confidentialSymbol, decimals, underlyingSymbol, underlyingDecimals] =
+    await Promise.all([
+      pub
+        .readContract({
+          address: pair.confidentialTokenAddress,
+          abi: metaAbi,
+          functionName: "symbol",
+        })
+        .catch(() => "cTOKEN"),
+      pub
+        .readContract({
+          address: pair.confidentialTokenAddress,
+          abi: metaAbi,
+          functionName: "decimals",
+        })
+        .catch(() => 6),
+      pub
+        .readContract({
+          address: pair.tokenAddress,
+          abi: metaAbi,
+          functionName: "symbol",
+        })
+        .catch(() => "TOKEN"),
+      pub
+        .readContract({
+          address: pair.tokenAddress,
+          abi: metaAbi,
+          functionName: "decimals",
+        })
+        .catch(() => null),
+    ]);
   return {
     symbol: String(confidentialSymbol),
     confidentialToken: pair.confidentialTokenAddress,
     underlying: pair.tokenAddress,
     underlyingSymbol: String(underlyingSymbol),
     decimals: Number(decimals),
+    // Fall back to the confidential decimals (rate 1) when the underlying omits
+    // the view, which preserves the old single-decimals behaviour for that pair.
+    underlyingDecimals:
+      underlyingDecimals == null
+        ? Number(decimals)
+        : Number(underlyingDecimals),
     hasFaucet: false,
   };
 }

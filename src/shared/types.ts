@@ -122,7 +122,8 @@ export interface TokenPair {
   confidentialToken: string;
   underlying: string;
   underlyingSymbol: string;
-  decimals: number;
+  decimals: number; // the confidential token's decimals: balances, transfers
+  underlyingDecimals: number; // the underlying ERC-20's decimals: wrap + faucet amounts
   hasFaucet: boolean;
 }
 

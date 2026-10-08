@@ -823,7 +823,7 @@ async function doFaucet(pair: TokenPair): Promise<void> {
     await ensureMainnet();
     const amount = toBaseUnits(
       ($("faucet-amount") as HTMLInputElement).value,
-      pair.decimals,
+      pair.underlyingDecimals,
     );
     status.textContent = `Minting ${pair.underlyingSymbol}…`;
     const walletClient = makeWalletClient();
@@ -848,7 +848,7 @@ async function doWrap(pair: TokenPair): Promise<void> {
   try {
     amount = toBaseUnits(
       ($("wrap-amount") as HTMLInputElement).value,
-      pair.decimals,
+      pair.underlyingDecimals,
     );
   } catch (error) {
     host.textContent = message(error);
