@@ -11,6 +11,12 @@
       "includeFiles": "node_modules/@nillion/covenants-sdk/dist/wasm/**"
     }
   },
+  "rewrites": [
+    {
+      "source": "/api/relayer/(.*)",
+      "destination": "/api/relayer?path=$1"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

@@ -235,7 +235,7 @@ async function getSdk(): Promise<ZamaSDK> {
       transport: http(),
     });
     // Route the relayer through this app's own /api/relayer proxy, which injects
-    // the Zama mainnet API key server-side (see api/relayer/[...path].ts), so the
+    // the Zama mainnet API key server-side (see api/relayer.ts), so the
     // key never reaches the browser bundle.
     const relayerChain = {
       ...mainnetFhe,
